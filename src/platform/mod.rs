@@ -110,3 +110,29 @@ pub fn is_cursor_over_window(window_title: &str, padding_px: i32) -> Option<bool
         None
     }
 }
+
+pub fn is_cursor_in_top_trigger(
+    top_offset_px: f32,
+    trigger_width_px: f32,
+    pixels_per_point: f32,
+) -> Option<bool> {
+    #[cfg(windows)]
+    return windows::is_cursor_in_top_trigger(top_offset_px, trigger_width_px, pixels_per_point);
+
+    #[cfg(not(windows))]
+    {
+        let _ = (top_offset_px, trigger_width_px, pixels_per_point);
+        None
+    }
+}
+
+pub fn is_foreground_fullscreen() -> bool {
+    #[cfg(windows)]
+    return windows::is_foreground_fullscreen();
+
+    #[cfg(target_os = "linux")]
+    return linux::is_foreground_fullscreen();
+
+    #[cfg(not(any(windows, target_os = "linux")))]
+    false
+}

@@ -29,8 +29,8 @@ Referensi cakupan fitur: [[PRD-LiebertDynamicIsland-MVP]].
 - [x] Implementasikan interaksi: auto-collapse 5 detik, hover expand & pause timer, serta tombol `Dismiss`
 
 ### Fase 4: Testing & Release
-- [x] Tambahkan unit test state machine, config, lyrics, todo, & calendar (`cargo test` — 15 tests passed)
-- [ ] Uji manual edge cases: multi-notifikasi berurutan, teks panjang/Unicode, multi-DPI scaling, hover expand live, Spotify lyrics, & Google Calendar `.ics`
+- [x] Tambahkan unit test state machine, config, clock, lyrics, todo, & calendar (`cargo test` — 19 tests passed)
+- [ ] Uji manual edge cases: multi-notifikasi berurutan, teks panjang/Unicode, multi-DPI scaling, hover expand live, top-edge hover reveal saat auto-hide, Spotify lyrics, & Google Calendar `.ics`
 - [ ] Verifikasi target performa `--release`: RAM idle `< 25 MB`, CPU idle `< 0.5%`, latency `< 150 ms`
 - [ ] Perbarui `README.md` (cara build, izin Windows, catatan daemon Linux) & lakukan smoke test binary Windows + Linux
 
@@ -40,8 +40,15 @@ Referensi cakupan fitur: [[PRD-LiebertDynamicIsland-MVP]].
 - [x] **Todo List:** Checklist lokal dengan persistensi `todos.toml` (`src/todo.rs`)
 - [x] **Google Calendar:** Sync feed Secret iCal `.ics` + upcoming events & alert 5 menit (`src/calendar.rs`)
 - [x] **Hover Fix:** Perbaikan hover-expand saat `Idle` & Win32 cursor hit-test untuk window `WS_EX_NOACTIVATE`
-- [ ] System HUD (indikator Volume & Brightness)
-- [ ] Fullscreen / Game Auto-Hide otomatis
+- [x] **Jam & Zona Waktu + Idle Display Mode:** Jam IANA (`chrono-tz`), format 12h/24h, detik, dan pilihan tampilan idle (`Auto`, `Clock`, `Lyrics`, `NextEvent`, `Minimal`) di `src/clock.rs` & `src/ui/`
+- [x] **Delayed Auto-Hide + Top-Edge Hover Reveal:** Auto-hide setelah *N* detik idle (`auto_hide_delay_secs`) dan muncul kembali saat kursor mengarah ke tepi atas tengah layar (Windows)
+- [x] **Fullscreen / Game Auto-Hide:** Sembunyikan pill otomatis saat aplikasi/game/video fullscreen aktif di monitor utama (Windows; toggle di Settings)
+- [ ] **Quick Timer / Pomodoro:** Countdown fokus langsung di pill idle yang terhubung dengan Todo List
+- [ ] **Launch at Startup & Multi-Monitor Picker:** Toggle autostart OS dan pilihan monitor target di Settings
+- [ ] **System HUD (Volume & Brightness):** Bar indikator custom saat volume atau brightness berubah
+- [ ] **Click-to-Focus App:** Klik notifikasi untuk memfokuskan aplikasi pengirimnya
+- [ ] **Quick Drop / Clipboard Shelf:** Area drag-and-drop sementara untuk file atau teks antar window
+- [ ] **Battery / System Mini Status:** Indikator baterai/charging di pill saat idle
 
 ## P2 — Could Have (Future)
 - [ ] Timer / Pomodoro cepat di dalam pill

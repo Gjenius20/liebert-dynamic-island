@@ -9,7 +9,8 @@ use eframe::egui::{self, Color32, CornerRadius, FontId, Pos2, RichText, Stroke, 
 use crate::calendar::{
     CalendarCommand, CalendarEvent, format_countdown, format_local_time, upcoming_events,
 };
-use crate::config::Config;
+use crate::clock::format_clock;
+use crate::config::{Config, IdleDisplayMode};
 use crate::lyrics::{LyricsData, active_lyric_line};
 use crate::platform::{self, MediaCommand, MediaTrack, PlatformEvent};
 use crate::state::{IslandState, IslandVisualState, ListenerStatus, NotificationItem};
@@ -54,6 +55,7 @@ pub struct IslandApp {
     current_size: Vec2,
     applied_size: Vec2,
     last_frame: Instant,
+    last_fullscreen_check: Instant,
     no_activate_applied: bool,
     last_visible: bool,
     last_egui_hovered: bool,
@@ -68,7 +70,9 @@ impl IslandApp {
         demo_mode: bool,
     ) -> Self {
         let timeout = Duration::from_secs(config.collapse_timeout_secs.max(1));
-        let state = IslandState::new(config.auto_hide_when_idle, timeout);
+        let mut state = IslandState::new(config.auto_hide_when_idle, timeout);
+        state.set_auto_hide_delay(Duration::from_secs(config.auto_hide_delay_secs));
+        state.set_hide_in_fullscreen(config.hide_in_fullscreen);
         let now = Instant::now();
         let calendar_url_input = config.google_calendar_ics_url.clone();
         let initial_w = config.idle_width * config.scale;
@@ -99,10 +103,24 @@ impl IslandApp {
             current_size: initial_size,
             applied_size: initial_size,
             last_frame: now,
+            last_fullscreen_check: now - Duration::from_secs(1),
             no_activate_applied: false,
             last_visible: true,
             last_egui_hovered: false,
             demo_deadline: demo_mode.then(|| now + Duration::from_secs(1)),
+        }
+    }
+
+    fn effective_idle_mode(&self) -> IdleDisplayMode {
+        match self.config.idle_display {
+            IdleDisplayMode::Auto => {
+                if self.config.show_lyrics && self.media.is_some() {
+                    IdleDisplayMode::Lyrics
+                } else {
+                    IdleDisplayMode::Clock
+                }
+            }
+            other => other,
         }
     }
 
@@ -112,10 +130,34 @@ impl IslandApp {
             IslandVisualState::Idle => {
                 if matches!(self.state.listener_status, ListenerStatus::AccessDenied(_)) {
                     Vec2::new(330.0 * s, 44.0 * s)
-                } else if self.config.show_lyrics && self.media.is_some() {
-                    Vec2::new(self.config.idle_width.max(250.0) * s, 32.0 * s)
                 } else {
-                    Vec2::new(self.config.idle_width * s, 30.0 * s)
+                    match self.effective_idle_mode() {
+                        IdleDisplayMode::Lyrics
+                            if self.config.show_lyrics && self.media.is_some() =>
+                        {
+                            Vec2::new(self.config.idle_width.max(250.0) * s, 32.0 * s)
+                        }
+                        IdleDisplayMode::NextEvent if self.config.show_calendar => {
+                            let now_utc = chrono::Utc::now().timestamp();
+                            if upcoming_events(&self.calendar_events, now_utc, 1).is_empty() {
+                                Vec2::new(self.config.idle_width * s, 30.0 * s)
+                            } else {
+                                Vec2::new(self.config.idle_width.max(220.0) * s, 30.0 * s)
+                            }
+                        }
+                        IdleDisplayMode::Clock => {
+                            let needs_wide = self.config.clock_show_seconds
+                                || !self.config.clock_24h
+                                || !self.config.clock_timezone.eq_ignore_ascii_case("local");
+                            let w = if needs_wide {
+                                self.config.idle_width.max(162.0)
+                            } else {
+                                self.config.idle_width
+                            };
+                            Vec2::new(w * s, 30.0 * s)
+                        }
+                        _ => Vec2::new(self.config.idle_width * s, 30.0 * s),
+                    }
                 }
             }
             IslandVisualState::Compact => Vec2::new(340.0 * s, 58.0 * s),
@@ -216,7 +258,7 @@ impl IslandApp {
                     }
                     TrayAction::ToggleAutoHide => {
                         let checked = tray.is_auto_hide_checked();
-                        self.state.auto_hide = checked;
+                        self.state.set_auto_hide(checked, now);
                         self.config.auto_hide_when_idle = checked;
                         if let Err(err) = self.config.save() {
                             eprintln!("Failed to save config: {err}");
@@ -304,15 +346,36 @@ impl eframe::App for IslandApp {
 
         self.handle_events(ctx, now);
 
-        // Win32 WS_EX_NOACTIVATE windows can drop pointer-hover events; poll OS cursor bounds directly.
-        let pad = if self.state.hovered { 6 } else { 0 };
-        let hovered =
-            platform::is_cursor_over_window(WINDOW_TITLE, pad).unwrap_or(self.last_egui_hovered);
+        let mut fs_changed = false;
+        if now.duration_since(self.last_fullscreen_check) >= Duration::from_millis(250) {
+            self.last_fullscreen_check = now;
+            let fs = self.config.hide_in_fullscreen && platform::is_foreground_fullscreen();
+            fs_changed = self.state.set_fullscreen_active(fs);
+        }
+
+        // Win32 WS_EX_NOACTIVATE windows can drop pointer-hover events; poll OS cursor bounds
+        // and top-edge trigger zone (even while auto-hidden) so hovering top-center reveals the notch.
+        let trigger_w = self.config.idle_width.max(180.0) * self.config.scale;
+        let top_trigger = platform::is_cursor_in_top_trigger(
+            self.config.top_offset_px,
+            trigger_w,
+            ctx.pixels_per_point(),
+        );
+        let hovered = if self.state.hide_in_fullscreen && self.state.fullscreen_active {
+            false
+        } else if !self.last_visible {
+            top_trigger.unwrap_or(false)
+        } else {
+            let pad = if self.state.hovered { 6 } else { 0 };
+            let over_win = platform::is_cursor_over_window(WINDOW_TITLE, pad)
+                .unwrap_or(self.last_egui_hovered);
+            over_win || (self.state.hovered && top_trigger.unwrap_or(false))
+        };
         let hover_changed = self.state.set_hovered(hovered, now);
 
         self.state.tick(now);
 
-        let visible = self.state.should_be_visible();
+        let visible = self.state.should_be_visible(now);
         if visible != self.last_visible {
             self.last_visible = visible;
             ctx.send_viewport_cmd(ViewportCommand::Visible(visible));
@@ -328,7 +391,8 @@ impl eframe::App for IslandApp {
 
         if (self.current_size - self.applied_size).length_sq() > 0.25 || hover_changed {
             self.applied_size = self.current_size;
-            let screen_w = platform::primary_monitor_logical_width();
+            let screen_w =
+                platform::primary_monitor_logical_width() / ctx.pixels_per_point().max(1.0);
             let x = ((screen_w - self.current_size.x) * 0.5).max(0.0);
             ctx.send_viewport_cmd(ViewportCommand::InnerSize(self.current_size));
             ctx.send_viewport_cmd(ViewportCommand::OuterPosition(Pos2::new(
@@ -340,12 +404,22 @@ impl eframe::App for IslandApp {
         let playing_lyrics = self.config.show_lyrics
             && self.media.as_ref().is_some_and(|m| m.is_playing)
             && matches!(self.lyrics, LyricsData::Synced(_));
+        let showing_live_seconds = self.state.visual == IslandVisualState::Idle
+            && self.effective_idle_mode() == IdleDisplayMode::Clock
+            && self.config.clock_show_seconds;
 
-        if animating || hover_changed {
+        if animating || hover_changed || fs_changed {
             ctx.request_repaint();
-        } else if playing_lyrics {
+        } else if (self.state.hide_in_fullscreen && self.state.fullscreen_active)
+            || playing_lyrics
+            || showing_live_seconds
+        {
             ctx.request_repaint_after(Duration::from_millis(250));
-        } else if let Some(deadline) = self.state.next_deadline() {
+        } else if let Some(deadline) = self
+            .state
+            .next_deadline()
+            .or_else(|| self.state.auto_hide_deadline())
+        {
             let wait = deadline
                 .saturating_duration_since(now)
                 .min(Duration::from_millis(80));
@@ -402,9 +476,17 @@ impl eframe::App for IslandApp {
             },
         );
         if config_dirty {
-            self.state.auto_hide = self.config.auto_hide_when_idle;
+            self.state.set_auto_hide(self.config.auto_hide_when_idle, now);
+            self.state
+                .set_auto_hide_delay(Duration::from_secs(self.config.auto_hide_delay_secs));
+            self.state
+                .set_hide_in_fullscreen(self.config.hide_in_fullscreen);
+            self.last_fullscreen_check = now - Duration::from_secs(1);
             self.state
                 .set_collapse_timeout(Duration::from_secs(self.config.collapse_timeout_secs));
+            if let Some(tray) = &self.tray {
+                tray.set_auto_hide_checked(self.config.auto_hide_when_idle);
+            }
             if let Err(err) = self.config.save() {
                 eprintln!("Failed to save config: {err}");
             }
@@ -439,36 +521,97 @@ impl IslandApp {
             return;
         }
 
-        if self.config.show_lyrics
-            && let Some(track) = &self.media
-        {
-            let pos_ms = self.current_playback_ms(now);
-            let line = active_lyric_line(&self.lyrics, pos_ms)
-                .map(|(curr, _)| curr.to_owned())
-                .unwrap_or_else(|| {
-                    if track.artist.is_empty() {
-                        track.title.clone()
-                    } else {
-                        format!("{} — {}", track.artist, track.title)
-                    }
-                });
+        match self.effective_idle_mode() {
+            IdleDisplayMode::Lyrics if self.config.show_lyrics && self.media.is_some() => {
+                if let Some(track) = &self.media {
+                    let pos_ms = self.current_playback_ms(now);
+                    let line = active_lyric_line(&self.lyrics, pos_ms)
+                        .map(|(curr, _)| curr.to_owned())
+                        .unwrap_or_else(|| {
+                            if track.artist.is_empty() {
+                                track.title.clone()
+                            } else {
+                                format!("{} — {}", track.artist, track.title)
+                            }
+                        });
 
-            ui.horizontal_centered(|ui| {
-                ui.label(
-                    RichText::new(if track.is_playing { "♪" } else { "⏸" })
-                        .font(FontId::proportional(11.0 * s))
-                        .color(accent),
+                    ui.horizontal_centered(|ui| {
+                        ui.label(
+                            RichText::new(if track.is_playing { "♪" } else { "⏸" })
+                                .font(FontId::proportional(11.0 * s))
+                                .color(accent),
+                        );
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(line)
+                                    .font(FontId::proportional(11.0 * s))
+                                    .color(text_col),
+                            )
+                            .truncate(),
+                        );
+                    });
+                    return;
+                }
+            }
+            IdleDisplayMode::Clock => {
+                let (time_str, tz_label) = format_clock(
+                    chrono::Utc::now(),
+                    &self.config.clock_timezone,
+                    self.config.clock_24h,
+                    self.config.clock_show_seconds,
                 );
-                ui.add(
-                    egui::Label::new(
-                        RichText::new(line)
-                            .font(FontId::proportional(11.0 * s))
-                            .color(text_col),
-                    )
-                    .truncate(),
-                );
-            });
-            return;
+                let show_tz = !self.config.clock_timezone.eq_ignore_ascii_case("local");
+                ui.centered_and_justified(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new("●")
+                                .font(FontId::proportional(8.5 * s))
+                                .color(if self.state.paused {
+                                    Color32::from_gray(140)
+                                } else {
+                                    accent
+                                }),
+                        );
+                        ui.label(
+                            RichText::new(time_str)
+                                .font(FontId::monospace(12.0 * s))
+                                .color(text_col)
+                                .strong(),
+                        );
+                        if show_tz {
+                            ui.label(
+                                RichText::new(tz_label)
+                                    .font(FontId::proportional(9.5 * s))
+                                    .color(muted),
+                            );
+                        }
+                    });
+                });
+                return;
+            }
+            IdleDisplayMode::NextEvent if self.config.show_calendar => {
+                let now_utc = chrono::Utc::now().timestamp();
+                if let Some(ev) = upcoming_events(&self.calendar_events, now_utc, 1).first() {
+                    ui.horizontal_centered(|ui| {
+                        ui.label(
+                            RichText::new(format_countdown(ev.start_utc, ev.end_utc, now_utc))
+                                .font(FontId::proportional(10.5 * s))
+                                .color(accent)
+                                .strong(),
+                        );
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(&ev.summary)
+                                    .font(FontId::proportional(11.0 * s))
+                                    .color(text_col),
+                            )
+                            .truncate(),
+                        );
+                    });
+                    return;
+                }
+            }
+            _ => {}
         }
 
         ui.centered_and_justified(|ui| {
@@ -630,6 +773,26 @@ impl IslandApp {
         let text_col = self.text_color32();
         let muted = self.muted_color32();
         let s = self.config.scale;
+
+        let (time_str, tz_label) = format_clock(
+            chrono::Utc::now(),
+            &self.config.clock_timezone,
+            self.config.clock_24h,
+            self.config.clock_show_seconds,
+        );
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new(time_str)
+                    .font(FontId::monospace(12.5 * s))
+                    .color(text_col)
+                    .strong(),
+            );
+            ui.label(
+                RichText::new(tz_label)
+                    .font(FontId::proportional(10.5 * s))
+                    .color(muted),
+            );
+        });
 
         if self.config.show_lyrics {
             if let Some(track) = &self.media {

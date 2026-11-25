@@ -10,6 +10,9 @@ tags:
 
 ## 2026-11-25
 ### Added
+- `src/platform/windows.rs`, `src/platform/mod.rs`, `src/platform/linux.rs`, `src/state.rs`: Menambahkan deteksi aplikasi/game fullscreen di monitor utama (`GetForegroundWindow` + `GetMonitorInfoW`) dan otomatis menyembunyikan Dynamic Island (serta menonaktifkan top-edge hover reveal) selama fullscreen aktif; Linux saat ini menggunakan shortcut `false`.
+- `src/clock.rs`: Menambahkan modul jam digital dengan dukungan zona waktu IANA (`chrono-tz 0.10`), daftar zona waktu umum (`Local`, `UTC`, `Asia/Jakarta`, `Asia/Tokyo`, dll.), format 12h/24h, opsi detik, serta 2 unit test.
+- `src/state.rs`, `src/platform/mod.rs`, `src/platform/windows.rs`: Menambahkan delayed auto-hide (`auto_hide_delay_secs`, `idle_since`) dan `is_cursor_in_top_trigger` untuk memunculkan kembali notch saat kursor diarahkan ke tepi atas tengah layar.
 - `src/lyrics.rs`: Menambahkan parser LRC (`[mm:ss.xx]`), sinkronisasi baris lirik aktif/berikutnya terhadap posisi playback, dan worker background (`ureq 3.5` + `serde_json`) ke `lrclib.net` dengan cache per lagu.
 - `src/todo.rs`: Menambahkan `TodoStore` dan persistensi lokal `todos.toml` (add, toggle, remove, clear completed) beserta unit test.
 - `src/calendar.rs`: Menambahkan parser `.ics` RFC 5545 (`parse_ics`), filter jadwal terdekat (`upcoming_events`), countdown, worker sinkronisasi berkala 5 menit untuk Google Calendar Secret iCal URL, dan alert 5 menit sebelum acara.
@@ -18,6 +21,9 @@ tags:
 - `AGENTS.md`: Menambahkan panduan kolaborasi agent/developer (perintah build/test, batas modul, standar kualitas, API gotchas, dan aturan wajib sinkronisasi Obsidian `/docs`). Lihat [[01 - Arsitektur & Spesifikasi]] dan [[03 - Catatan Rapat & Keputusan]].
 
 ### Changed
+- `Cargo.toml`, `src/config.rs`, `src/ui/settings.rs`, `src/ui/mod.rs`: Menambahkan fitur `Win32_Graphics_Gdi` pada `windows 0.62`, opsi `hide_in_fullscreen` (default `true`) di `Config` & Settings, serta polling fullscreen tiap `250 ms`.
+- `Cargo.toml`: Menambahkan `chrono-tz 0.10` untuk resolusi zona waktu IANA.
+- `src/config.rs`, `src/ui/settings.rs`, `src/ui/mod.rs`, `src/tray.rs`, `src/main.rs`: Menambahkan `IdleDisplayMode` (`Auto`, `Clock`, `Lyrics`, `NextEvent`, `Minimal`), pengaturan zona waktu/format jam, slider `auto_hide_delay_secs`, sinkronisasi checkmark tray, koreksi lebar monitor berbasis `pixels_per_point()`, serta logika tampil-kembali saat hover di tepi atas layar.
 - `Cargo.toml`: Menambahkan `ureq 3.5`, `serde_json 1.0`, `chrono 0.4`, dan fitur WinRT `Media_Control` pada `windows 0.62`.
 - `src/config.rs`: Memperluas `Config` dengan pengaturan ukuran, warna, corner radius, toggle fitur, URL `.ics`, serta 4 tema preset (`obsidian`, `midnight`, `amoled`, `slate`) dengan backward-compatible `#[serde(default)]`.
 - `src/tray.rs`, `src/ui/mod.rs`, `src/main.rs`: Menambahkan menu tray `Settings...`, hub tab expanded (`Overview`, `Lyrics`, `Todo`, `Cal`), tampilan lirik ringkas di state idle saat musik diputar, serta wiring seluruh background worker.

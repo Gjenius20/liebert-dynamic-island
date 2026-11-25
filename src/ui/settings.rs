@@ -3,7 +3,8 @@ use std::sync::mpsc;
 use eframe::egui::{self, Color32, RichText, ViewportBuilder, ViewportId};
 
 use crate::calendar::{CalendarCommand, CalendarEvent, format_countdown, format_local_time, upcoming_events};
-use crate::config::Config;
+use crate::clock::{COMMON_TIMEZONES, format_clock, is_valid_timezone};
+use crate::config::{Config, IdleDisplayMode};
 use crate::todo::TodoStore;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -138,9 +139,110 @@ fn render_appearance_tab(ui: &mut egui::Ui, config: &mut Config, config_dirty: &
         .changed();
 
     ui.add_space(8.0);
-    ui.label(RichText::new("Modules & Behavior").strong());
+    ui.label(RichText::new("Idle Display & Clock").strong());
+    egui::ComboBox::from_id_salt("idle_display_mode")
+        .selected_text(config.idle_display.label())
+        .show_ui(ui, |ui| {
+            for mode in [
+                IdleDisplayMode::Auto,
+                IdleDisplayMode::Clock,
+                IdleDisplayMode::Lyrics,
+                IdleDisplayMode::NextEvent,
+                IdleDisplayMode::Minimal,
+            ] {
+                if ui
+                    .selectable_value(&mut config.idle_display, mode, mode.label())
+                    .changed()
+                {
+                    changed = true;
+                }
+            }
+        });
+
+    let selected_tz_label = COMMON_TIMEZONES
+        .iter()
+        .find(|(id, _)| id.eq_ignore_ascii_case(config.clock_timezone.trim()))
+        .map(|(_, label)| *label)
+        .unwrap_or(config.clock_timezone.as_str());
+
+    egui::ComboBox::from_id_salt("clock_tz_preset")
+        .selected_text(selected_tz_label)
+        .show_ui(ui, |ui| {
+            for (id, label) in COMMON_TIMEZONES {
+                if ui
+                    .selectable_label(config.clock_timezone.eq_ignore_ascii_case(id), *label)
+                    .clicked()
+                {
+                    config.clock_timezone = (*id).to_owned();
+                    changed = true;
+                }
+            }
+        });
+
+    ui.horizontal(|ui| {
+        ui.label("Custom IANA TZ:");
+        if ui
+            .add(
+                egui::TextEdit::singleline(&mut config.clock_timezone)
+                    .hint_text("Local or Asia/Jakarta")
+                    .desired_width(170.0),
+            )
+            .changed()
+        {
+            changed = true;
+        }
+        let valid = is_valid_timezone(&config.clock_timezone);
+        let (preview, tz_label) = format_clock(
+            chrono::Utc::now(),
+            &config.clock_timezone,
+            config.clock_24h,
+            config.clock_show_seconds,
+        );
+        if valid {
+            ui.label(
+                RichText::new(format!("{preview} ({tz_label})"))
+                    .small()
+                    .color(Color32::from_rgb(100, 210, 150)),
+            );
+        } else {
+            ui.label(
+                RichText::new("Invalid TZ (using Local)")
+                    .small()
+                    .color(Color32::from_rgb(255, 130, 120)),
+            );
+        }
+    });
+    ui.horizontal(|ui| {
+        changed |= ui.checkbox(&mut config.clock_24h, "24-hour format").changed();
+        changed |= ui
+            .checkbox(&mut config.clock_show_seconds, "Show seconds")
+            .changed();
+    });
+
+    ui.add_space(8.0);
+    ui.label(RichText::new("Modules & Auto-Hide").strong());
     changed |= ui
         .checkbox(&mut config.auto_hide_when_idle, "Auto-hide island when idle")
+        .changed();
+    changed |= ui
+        .add_enabled(
+            config.auto_hide_when_idle,
+            egui::Slider::new(&mut config.auto_hide_delay_secs, 0..=60)
+                .text("Auto-hide delay (s)"),
+        )
+        .changed();
+    if config.auto_hide_when_idle {
+        ui.label(
+            RichText::new("Tip: arahkan kursor ke tepi atas tengah layar untuk memunculkan notch kembali.")
+                .small()
+                .color(Color32::GRAY),
+        );
+    }
+    changed |= ui
+        .checkbox(
+            &mut config.hide_in_fullscreen,
+            "Hide when a fullscreen app/game is active",
+        )
         .changed();
     changed |= ui
         .checkbox(&mut config.show_lyrics, "Show Music & Synced Lyrics")

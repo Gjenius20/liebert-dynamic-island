@@ -4,6 +4,28 @@ use std::path::PathBuf;
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum IdleDisplayMode {
+    #[default]
+    Auto,
+    Clock,
+    Lyrics,
+    NextEvent,
+    Minimal,
+}
+
+impl IdleDisplayMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Auto => "Auto (Lyrics -> Clock)",
+            Self::Clock => "Clock",
+            Self::Lyrics => "Lyrics / Now Playing",
+            Self::NextEvent => "Next Calendar Event",
+            Self::Minimal => "Minimal Dot",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Config {
@@ -12,12 +34,18 @@ pub struct Config {
     pub expanded_width: f32,
     pub top_offset_px: f32,
     pub collapse_timeout_secs: u64,
+    pub auto_hide_when_idle: bool,
+    pub auto_hide_delay_secs: u64,
+    pub hide_in_fullscreen: bool,
+    pub idle_display: IdleDisplayMode,
+    pub clock_timezone: String,
+    pub clock_24h: bool,
+    pub clock_show_seconds: bool,
     pub bg_color: [u8; 4],
     pub accent_color: [u8; 3],
     pub text_color: [u8; 3],
     pub border_alpha: u8,
     pub corner_radius: u8,
-    pub auto_hide_when_idle: bool,
     pub show_lyrics: bool,
     pub show_todo: bool,
     pub show_calendar: bool,
@@ -32,12 +60,18 @@ impl Default for Config {
             expanded_width: 390.0,
             top_offset_px: 10.0,
             collapse_timeout_secs: 5,
+            auto_hide_when_idle: false,
+            auto_hide_delay_secs: 5,
+            hide_in_fullscreen: true,
+            idle_display: IdleDisplayMode::Auto,
+            clock_timezone: "Local".to_owned(),
+            clock_24h: true,
+            clock_show_seconds: false,
             bg_color: [16, 16, 20, 240],
             accent_color: [110, 195, 255],
             text_color: [245, 245, 248],
             border_alpha: 36,
             corner_radius: 22,
-            auto_hide_when_idle: false,
             show_lyrics: true,
             show_todo: true,
             show_calendar: true,
@@ -69,6 +103,7 @@ impl Config {
         cfg.expanded_width = cfg.expanded_width.clamp(320.0, 520.0);
         cfg.top_offset_px = cfg.top_offset_px.clamp(0.0, 60.0);
         cfg.collapse_timeout_secs = cfg.collapse_timeout_secs.clamp(2, 15);
+        cfg.auto_hide_delay_secs = cfg.auto_hide_delay_secs.clamp(0, 60);
         cfg.corner_radius = cfg.corner_radius.clamp(8, 28);
         cfg
     }
@@ -126,6 +161,10 @@ mod tests {
         assert_eq!(cfg.scale, 1.0);
         assert_eq!(cfg.top_offset_px, 10.0);
         assert_eq!(cfg.collapse_timeout_secs, 5);
+        assert_eq!(cfg.auto_hide_delay_secs, 5);
+        assert!(cfg.hide_in_fullscreen);
+        assert_eq!(cfg.idle_display, IdleDisplayMode::Auto);
+        assert_eq!(cfg.clock_timezone, "Local");
         assert!(cfg.show_lyrics && cfg.show_todo && cfg.show_calendar);
     }
 
@@ -133,6 +172,12 @@ mod tests {
     fn toml_round_trip() {
         let mut cfg = Config {
             auto_hide_when_idle: true,
+            auto_hide_delay_secs: 12,
+            hide_in_fullscreen: false,
+            idle_display: IdleDisplayMode::Clock,
+            clock_timezone: "Asia/Jakarta".to_owned(),
+            clock_24h: false,
+            clock_show_seconds: true,
             top_offset_px: 14.5,
             collapse_timeout_secs: 8,
             google_calendar_ics_url: "https://calendar.google.com/calendar/ical/test/basic.ics"
