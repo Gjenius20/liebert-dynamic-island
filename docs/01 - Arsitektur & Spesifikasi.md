@@ -12,11 +12,11 @@ tags:
 Referensi spesifikasi produk: [[PRD-LiebertDynamicIsland-MVP]].
 
 ## Tech Stack (Aktual)
-- **Bahasa:** Rust (`edition = "2024"`, `rustc 1.99.1`)
+- **Bahasa:** Rust (`edition = "2024"`, `rustc 1.98.1` Linux / `rustc 1.99.1` Windows)
 - **UI / Renderer:** `eframe 0.37` (`egui`, `Renderer::Glow`, fitur `x11` & `wayland`, multi-viewport `show_viewport_immediate` untuk Settings) — lihat [[03 - Catatan Rapat & Keputusan]]
-- **Windows Bridge:** `windows 0.62` — Win32 (`WS_EX_NOACTIVATE`, `WS_EX_TOOLWINDOW`, `GWL_STYLE` borderless `WS_POPUP` tanpa `WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX|WS_MAXIMIZEBOX`, `Win32_Graphics_Dwm` `DWMWA_WINDOW_CORNER_PREFERENCE` & `DWMWA_BORDER_COLOR` untuk menonaktifkan border/rounding DWM Windows 11, `SetWindowPos` / `pin_window_top_y` / `bring_window_to_front`, `GetCursorPos`/`GetWindowRect`, `GetSystemMetrics`, `Win32_Graphics_Gdi` `GetForegroundWindow` + `GetMonitorInfoW`), WinRT `UserNotificationListener` (+ fallback polling `500 ms` untuk `.exe` unpackaged), `Media`/`Media_Control` (SMTC + ekstrapolasi `LastUpdatedTime` + Shuffle/Repeat/Seek), & `Storage_Streams` (Album Cover)
-- **Linux Bridge:** `zbus 6.5` (D-Bus `org.freedesktop.Notifications` & MPRIS2 `org.mpris.MediaPlayer2.*` + Shuffle/Loop/Seek/`mpris:artUrl`) + windowing `eframe`/`winit` (X11 / Wayland)
-- **System Tray, Config & Integrations:** `tray-icon 0.27`, `serde` + `serde_json` + `toml 1.2`, `directories 6.0`, `ureq 3.5` (LRCLIB, Google Translate `dt=t`, & Google Calendar `.ics`), `kakasi 0.1` + `any_ascii 0.3` (romanisasi offline multi-aksara), `image 0.25` (decode cover album & ekstraksi warna dominan), `chrono 0.4` + `chrono-tz 0.10`
+- **Windows Bridge:** `windows 0.62` — Win32 (`WS_EX_NOACTIVATE`, `WS_EX_TOOLWINDOW`, `GetCursorPos`/`GetWindowRect`, `GetSystemMetrics`, `Win32_Graphics_Gdi` `GetForegroundWindow` + `GetMonitorInfoW`), WinRT `UserNotificationListener`, `Media`/`Media_Control` (SMTC + Shuffle/Repeat/Seek), & `Storage_Streams` (Album Cover)
+- **Linux Bridge:** `zbus 6.5` (D-Bus `org.freedesktop.Notifications` — builder `session()/name()/serve_at()` mengembalikan `Self`, error ditunda ke `build().await`, hints memakai `OwnedVariant` — & MPRIS2 `org.mpris.MediaPlayer2.*` + Shuffle/Loop/Seek/`mpris:artUrl`), Hyprland UNIX IPC socket (`.socket.sock` untuk `hl.window_rule`/`move`/`resize`/fullscreen/cursor tracking), + windowing `eframe`/`winit` (X11 / Wayland)
+- **System Tray, Config & Integrations:** `tray-icon 0.27` (fitur `ksni` murni D-Bus StatusNotifierItem tanpa dependensi GTK di Linux), `serde` + `serde_json` + `toml 1.2`, `directories 6.0`, `ureq 3.5` (LRCLIB, Google Translate `dt=t&dt=rm`, & Google Calendar `.ics`), `image 0.25` (decode cover album & ekstraksi warna dominan), `chrono 0.4` + `chrono-tz 0.10`
 
 ## Struktur Folder Kode
 ```text

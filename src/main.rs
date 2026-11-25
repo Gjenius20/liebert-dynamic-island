@@ -64,6 +64,8 @@ fn main() -> ExitCode {
         config.top_offset_px
     };
 
+    platform::prepare_overlay_rules(WINDOW_TITLE, config.top_offset_px);
+
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Glow,
         viewport: egui::ViewportBuilder::default()

@@ -180,15 +180,29 @@ pub fn primary_monitor_logical_width() -> f32 {
     #[cfg(windows)]
     return windows::primary_monitor_logical_width();
 
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    return linux::primary_monitor_logical_width();
+
+    #[cfg(not(any(windows, target_os = "linux")))]
     1920.0
+}
+
+pub fn prepare_overlay_rules(window_title: &str, top_offset_px: f32) {
+    #[cfg(target_os = "linux")]
+    linux::prepare_overlay_rules(window_title, top_offset_px);
+
+    #[cfg(not(target_os = "linux"))]
+    let _ = (window_title, top_offset_px);
 }
 
 pub fn apply_no_activate_hook(window_title: &str) {
     #[cfg(windows)]
     windows::apply_no_activate_hook(window_title);
 
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    linux::apply_no_activate_hook(window_title);
+
+    #[cfg(not(any(windows, target_os = "linux")))]
     let _ = window_title;
 }
 
@@ -215,7 +229,10 @@ pub fn is_cursor_over_window(window_title: &str, padding_px: i32) -> Option<bool
     #[cfg(windows)]
     return windows::is_cursor_over_window(window_title, padding_px);
 
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    return linux::is_cursor_over_window(window_title, padding_px);
+
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         let _ = (window_title, padding_px);
         None
@@ -230,7 +247,10 @@ pub fn is_cursor_in_top_trigger(
     #[cfg(windows)]
     return windows::is_cursor_in_top_trigger(top_offset_px, trigger_width_px, pixels_per_point);
 
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    return linux::is_cursor_in_top_trigger(top_offset_px, trigger_width_px, pixels_per_point);
+
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         let _ = (top_offset_px, trigger_width_px, pixels_per_point);
         None

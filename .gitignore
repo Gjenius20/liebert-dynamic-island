@@ -4,3 +4,7 @@
 
 # Rust build artifacts
 target/
+
+# Linux AppImage packaging output
+dist/
+*.AppImage

@@ -626,6 +626,16 @@ impl eframe::App for IslandApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         if !self.no_activate_applied {
             platform::apply_no_activate_hook(WINDOW_TITLE);
+            let screen_w =
+                platform::primary_monitor_logical_width() / ctx.pixels_per_point().max(1.0);
+            let x = ((screen_w - self.current_size.x) * 0.5).max(0.0);
+            platform::position_overlay_window(
+                WINDOW_TITLE,
+                x,
+                self.config.top_offset_px,
+                self.current_size.x,
+                self.current_size.y,
+            );
             self.no_activate_applied = true;
         }
 
@@ -675,7 +685,8 @@ impl eframe::App for IslandApp {
 
         self.state.tick(now);
 
-        let visible = self.show_settings || self.state.should_be_visible(now);
+        let visible = self.state.should_be_visible(now);
+        let became_visible = visible && !self.last_visible;
         if visible != self.last_visible {
             self.last_visible = visible;
             ctx.send_viewport_cmd(ViewportCommand::Visible(visible));
@@ -707,10 +718,19 @@ impl eframe::App for IslandApp {
                 platform::primary_monitor_logical_width() / ctx.pixels_per_point().max(1.0);
             let x = ((screen_w - self.current_size.x) * 0.5).max(0.0);
             ctx.send_viewport_cmd(ViewportCommand::InnerSize(self.current_size));
-            ctx.send_viewport_cmd(ViewportCommand::OuterPosition(Pos2::new(x, top_y)));
-        }
-        if self.notch_morph >= 0.999 && self.last_visible {
-            platform::pin_window_top_y(WINDOW_TITLE, 0);
+            ctx.send_viewport_cmd(ViewportCommand::OuterPosition(Pos2::new(
+                x,
+                self.config.top_offset_px,
+            )));
+            if visible {
+                platform::position_overlay_window(
+                    WINDOW_TITLE,
+                    x,
+                    self.config.top_offset_px,
+                    self.current_size.x,
+                    self.current_size.y,
+                );
+            }
         }
 
         let playing_music = self.config.show_lyrics && self.media.as_ref().is_some_and(|m| m.is_playing);
