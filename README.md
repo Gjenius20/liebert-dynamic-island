@@ -1,9 +1,23 @@
 # Liebert Dynamic Island (Lidi)
+> Lightweight native Rust Dynamic Island overlay for **Windows 10/11** and **Linux (X11/Wayland)** that surfaces system notifications, media controls, synced karaoke lyrics, a Pomodoro timer, a local todo list, and Google Calendar alerts at the top-center of your screen without stealing window focus.
 
-<img width="439" height="188" alt="{4A867C8C-1ED8-449F-88FD-4F100F04841C}" src="https://github.com/user-attachments/assets/beecbc2a-f66c-43bf-b421-154a759ec6c9" />
+## UI
 
-Lightweight native Rust Dynamic Island overlay for **Windows 10/11** and **Linux (X11/Wayland)** that surfaces system notifications, media controls, synced karaoke lyrics, a Pomodoro timer, a local todo list, and Google Calendar alerts at the top-center of your screen without stealing window focus.
+| | |
+| :---: | :---: |
+| <img height="130" alt="UI Preview 1" src="https://github.com/user-attachments/assets/beecbc2a-f66c-43bf-b421-154a759ec6c9" /> | <img height="90" alt="UI Preview 2" src="https://github.com/user-attachments/assets/23af6133-3afa-4038-8a3f-e82aa42d356b" /> |
 
+> Modern UI That You Can Choose.
+
+---
+
+## Settings
+
+<p align="center">
+  <img width="340" alt="Settings Preview" src="https://github.com/user-attachments/assets/43106fe9-4c85-42a5-a46e-5f4cc7f00baa" />
+</p>
+
+> Fully Customize Settings.
 ## Key Features
 
 - **Non-Intrusive Notification Overlay:** Smooth `Idle` ↔ `Compact` ↔ `Expanded` pill transitions with branded app accents (WhatsApp, Discord, Gmail, Chrome, Telegram, Slack, etc.), notification queueing, hover-to-expand, and configurable auto-collapse.
