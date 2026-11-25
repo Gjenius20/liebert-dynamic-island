@@ -915,10 +915,11 @@ impl IslandApp {
         let became_visible = visible && !self.last_visible;
         if visible != self.last_visible {
             self.last_visible = visible;
-            if mode == OverlayBackendMode::Eframe
-                && !platform::set_overlay_visible(WINDOW_TITLE, visible)
-            {
-                ctx.send_viewport_cmd(ViewportCommand::Visible(visible));
+            // On Eframe (Windows/X11), keep the OS window shown and rely on transparent
+            // rendering + WS_EX_TRANSPARENT passthrough when hidden; calling SW_HIDE
+            // suppresses WM_PAINT so request_repaint() cannot wake logic() again.
+            if mode == OverlayBackendMode::WaylandLayerShell {
+                let _ = platform::set_overlay_visible(WINDOW_TITLE, visible);
             }
         }
         if mode == OverlayBackendMode::Eframe {
@@ -1012,17 +1013,13 @@ impl IslandApp {
         let repaint_after =
             if animating || morphing || vis_animating || hover_changed || fs_changed {
             Duration::ZERO
+        } else if !visible {
+            Duration::from_millis(250)
         } else if playing_lyrics && self.config.karaoke_lyrics {
-            Duration::from_millis(33)
+            Duration::from_millis(16)
         } else if showing_idle_bars {
-            Duration::from_millis(50)
-        } else if (self.state.hide_in_fullscreen
-            && self.state.fullscreen_active
-            && self.state.active.is_none())
-            || playing_lyrics
-            || showing_live_seconds
-            || pomodoro_running
-        {
+            Duration::from_millis(33)
+        } else if playing_lyrics || showing_live_seconds || pomodoro_running {
             Duration::from_millis(250)
         } else if let Some(deadline) = self
             .state
@@ -1100,17 +1097,14 @@ impl IslandApp {
             && self.media.is_some();
 
         let vis = self.visibility_anim.clamp(0.0, 1.0);
-        if vis <= 0.005 {
-            return;
-        }
+        if vis > 0.005 {
+            let top_y = self.effective_top_offset();
+            let slide_y = -((self.current_size.y + top_y) * (1.0 - vis)) * 0.65;
+            let border_alpha = ((border_alpha as f32) * vis).round() as u8;
 
-        let top_y = self.effective_top_offset();
-        let slide_y = -((self.current_size.y + top_y) * (1.0 - vis)) * 0.65;
-        let border_alpha = ((border_alpha as f32) * vis).round() as u8;
-
-        egui::CentralPanel::default()
-            .frame(egui::Frame::NONE)
-            .show(ui, |ui| {
+            egui::CentralPanel::default()
+                .frame(egui::Frame::NONE)
+                .show(ui, |ui| {
                 let canvas = ui.max_rect();
                 let card_x = canvas.left() + ((canvas.width() - self.current_size.x) * 0.5).max(0.0);
                 let card_y = canvas.top() + top_y + slide_y;
@@ -1184,12 +1178,13 @@ impl IslandApp {
                                     self.render_expanded(ui, &ctx, now);
                                 }
                             }
-                            IslandVisualState::Compact => self.render_compact(ui),
-                            IslandVisualState::Idle => self.render_idle(ui, &ctx, now),
-                        }
-                    });
-                }
-            });
+                                IslandVisualState::Compact => self.render_compact(ui),
+                                IslandVisualState::Idle => self.render_idle(ui, &ctx, now),
+                            }
+                        });
+                    }
+                });
+        }
 
         if !allow_inline_settings {
             return;

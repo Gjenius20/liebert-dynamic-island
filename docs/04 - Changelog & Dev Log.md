@@ -9,6 +9,9 @@ tags:
 # 04 - Changelog & Dev Log
 
 ## 2026-11-26
+### Changed
+- `src/ui/mod.rs`, `src/ui/settings.rs`: Mengoptimalkan frame pacing dan alokasi memori UI — menaikkan refresh karaoke lirik ke `16 ms` (~60 FPS) dan visualizer idle ke `33 ms` (~30 FPS) saat terlihat, menurunkan repaint saat overlay tersembunyi ke `250 ms`, serta menghindari kloning ulang `installed_fonts` dan `calendar_events` setiap frame pada `DeferredSettingsState`.
+
 ### Added
 - `src/ui/mod.rs`: Menambahkan animasi transisi `visibility_anim` (slide vertikal + fade opacity halus) saat fitur **Auto-hide island when idle** menyembunyikan atau memunculkan kembali pill/notch.
 - `src/config.rs`, `src/platform/windows.rs`, `src/platform/mod.rs`, `src/ui/mod.rs`, `src/ui/settings.rs`: Menambahkan opsi **`hide_in_windowed_fullscreen`** (*"Also hide on windowed fullscreen / maximized apps"*) di Settings di bawah `Hide when a fullscreen app/game is active`, dengan klasifikasi `detect_fullscreen_state` (`exclusive` vs `windowed`) melalui `PlatformEvent::Fullscreen(bool, bool)`.
@@ -19,6 +22,9 @@ tags:
 - `src/config.rs`, `src/ui/settings.rs`, `src/ui/mod.rs`: Menambahkan opsi **`KaraokeLyricMode::Translate`** di Settings sehingga lirik terjemahan dapat dipilih sebagai teks karaoke utama pada idle notch maupun Music Card.
 
 ### Fixed
+- `src/calendar.rs`: Menambahkan ekspansi event berulang (`RRULE` untuk `DAILY`, `WEEKLY` + `BYDAY`, `MONTHLY`, `YEARLY`, `INTERVAL`, `COUNT`, `UNTIL`, `EXDATE`, `RECURRENCE-ID`, serta dukungan `TZID`) pada `parse_ics_in_range` sehingga jadwal mingguan berulang dari Google Calendar ikut tampil, dan membatasi `upcoming_events` ke **minggu berjalan ini saja** (`current_week_end_utc`).
+- `Cargo.toml`, `src/ui/settings.rs`: Mengaktifkan fitur `"clipboard"` pada `eframe` (agar `Ctrl+C`/`Ctrl+V`/`Ctrl+X` di `egui::TextEdit` terhubung ke clipboard OS) serta menambahkan tombol **Copy** pada tab **Google Calendar** di Settings.
+- `src/ui/settings.rs`, `src/ui/mod.rs`: Memperbaiki panic `egui` (`egui backend is implemented incorrectly - the user callback was never called`) dan Dynamic Island yang tidak muncul kembali setelah masuk windowed-fullscreen/auto-hide — mengganti `show_viewport_immediate` Settings menjadi `show_viewport_deferred` dengan state bersama `Arc<Mutex<...>>`, mengeluarkan pemanggilan `render_settings_viewport` dari early-return `vis <= 0.005`, dan menjaga jendela `eframe` tetap aktif (`SW_SHOWNOACTIVATE` + transparan & click-through `WS_EX_TRANSPARENT`) alih-alih `SW_HIDE` yang menekan `WM_PAINT`/`RedrawRequested`.
 - `src/platform/windows.rs`: Memperbaiki `is_foreground_fullscreen` dan `is_rect_covering_monitor_as_fullscreen` agar jendela **windowed-fullscreen / maximized** (`IsZoomed(hwnd)` atau menutupi penuh `rcWork`/`rcMonitor`, termasuk browser/aplikasi saat taskbar auto-hide) ikut menyembunyikan Dynamic Island ketika `hide_in_fullscreen` aktif.
 - `src/ui/mod.rs`: Memperbaiki layout baris lirik idle dari `Layout::top_down` ke `Layout::left_to_right(Align::Center)` agar teks lirik/judul lagu tampil sejajar di samping ikon `♪` dan tidak terpotong di bawah clip-rect.
 - `src/ui/mod.rs`: Menghapus blok `paint_island_surface` duplikat pada `render_island_ui` yang sebelumnya menggambar kotak latar penuh di atas kanvas permanen transparan di belakang notch/pill.
@@ -81,7 +87,8 @@ tags:
 - `Cargo.toml`, `src/platform/windows.rs`, `src/platform/mod.rs`, `src/ui/mod.rs`: Menghapus garis/border bawaan Windows 11 DWM & celah `1–2 px` di tepi atas monitor dengan fitur `Win32_Graphics_Dwm` (`DWMWA_WINDOW_CORNER_PREFERENCE = DWMWCP_DONOTROUND`, `DWMWA_BORDER_COLOR = DWMWA_COLOR_NONE`), pembersihan `WS_CAPTION | WS_THICKFRAME | WS_BORDER | WS_DLGFRAME` pada `GWL_STYLE`, serta `pin_window_top_y(..., 0)` + overlap `top_y = rect.top() - 1.0` saat `notch_dock_mode` aktif agar menyatu seamless dengan bezel atas.
 - `src/platform/windows.rs`: Memperbaiki listener notifikasi Windows (`UserNotificationListener`) untuk `.exe` unpackaged dengan fallback polling `500 ms` (`recv_timeout`) dan pembacaan `visual.Bindings()` bila `ToastGeneric` kosong, sehingga popup notifikasi dari WhatsApp, Discord, browser, Gmail, dll. selalu tertangkap meski event `NotificationChanged` tidak dipicu oleh WinRT.
 
-### Added (Earlier)
+### Changed
+- `src/ui/mod.rs`, `src/ui/settings.rs`: Mengoptimalkan frame pacing dan alokasi memori UI — menaikkan refresh karaoke lirik ke `16 ms` (~60 FPS) dan visualizer idle ke `33 ms` (~30 FPS) saat terlihat, menurunkan repaint saat overlay tersembunyi ke `250 ms`, serta menghindari kloning ulang `installed_fonts` dan `calendar_events` setiap frame pada `DeferredSettingsState`. (Earlier)
 - `src/ui/mod.rs`, `src/config.rs`, `src/main.rs`: Menambahkan **Notch Dock Mode** (`notch_dock_mode`, default `true`) yang menempel pada tepi atas layar (`y = 0`) dengan telinga cekung atas (`paint_island_surface` + `egui::Mesh`), mini cover/disc badge + live lyric + 3-bar equalizer animasi saat idle musik, serta tetap otomatis tersembunyi saat aplikasi fullscreen aktif.
 - `src/platform/mod.rs`, `src/platform/windows.rs`, `src/platform/linux.rs`: Menambahkan ekstraksi cover album (`Storage_Streams::DataReader` pada WinRT SMTC & `mpris:artUrl` pada MPRIS2 Linux, cache per lagu, decode `image 0.25`) serta `extract_dominant_accent()` untuk mengekstrak warna aksen dominan album.
 - `src/ui/mod.rs`, `src/ui/settings.rs`, `src/config.rs`: Mendesain ulang Music & Lyrics card mengikuti referensi visual 2-kolom (cover album membulat + title/artist + playbar + transport di kiri, multi-line wrapped `LayoutJob` karaoke original & romaji + terjemahan + upcoming preview redup di kanan, gradient wash atmosferik di bagian bawah, tombol pill `Translate` & `Romaji` di bawah, opsi `dynamic_album_color`, serta preset `"Crimson"`).
@@ -111,7 +118,8 @@ tags:
 ### Fixed
 - `src/state.rs`, `src/platform/windows.rs`, `src/ui/mod.rs`: Memperbaiki bug di mana Dynamic Island tidak membesar saat di-hover — `set_hovered(true)` kini memicu `IslandVisualState::Expanded` meski sedang `Idle`, `dismiss_active` menjaga state `Expanded` selama kursor masih hover, dan deteksi hover di Windows memakai Win32 `GetCursorPos` + `GetWindowRect` agar tidak gagal pada window `WS_EX_NOACTIVATE`.
 
-### Added (Initial Bootstrap)
+### Changed
+- `src/ui/mod.rs`, `src/ui/settings.rs`: Mengoptimalkan frame pacing dan alokasi memori UI — menaikkan refresh karaoke lirik ke `16 ms` (~60 FPS) dan visualizer idle ke `33 ms` (~30 FPS) saat terlihat, menurunkan repaint saat overlay tersembunyi ke `250 ms`, serta menghindari kloning ulang `installed_fonts` dan `calendar_events` setiap frame pada `DeferredSettingsState`. (Initial Bootstrap)
 - `Cargo.toml`: Inisialisasi manifest proyek Rust (`edition = "2024"`) dengan dependensi `eframe 0.37` (`glow`), `windows 0.62`, `zbus 6.5` (target Linux), `tray-icon 0.27`, `serde`, `toml`, dan `directories`, serta profil release hemat ukuran (`lto = "thin"`, `strip = true`, `opt-level = "s"`).
 - `src/config.rs`: Menambahkan loader/saver konfigurasi lokal `config.toml` (`auto_hide_when_idle`, `top_offset_px`, `collapse_timeout_secs`) beserta 3 unit test fallback & round-trip TOML.
 - `src/state.rs`: Menambahkan model `NotificationItem`, state machine `IslandState` (`Idle`, `Compact`, `Expanded`), queue notifikasi dengan deduplikasi ID, timer auto-collapse, pause/auto-hide logic, serta 4 unit test alur state.

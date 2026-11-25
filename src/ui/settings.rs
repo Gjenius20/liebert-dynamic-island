@@ -1,6 +1,6 @@
 #[cfg(target_os = "linux")]
 use std::path::PathBuf;
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, OnceLock, mpsc};
 
 use eframe::egui::{self, Color32, CornerRadius, RichText, Stroke, Vec2, ViewportBuilder, ViewportId};
 
@@ -38,12 +38,104 @@ pub struct SettingsWindowState<'a> {
     pub font_search: &'a mut String,
 }
 
+struct DeferredSettingsState {
+    open: bool,
+    focus_requested: bool,
+    tab: SettingsTab,
+    config: Config,
+    todos: TodoStore,
+    new_todo_input: String,
+    calendar_url_input: String,
+    calendar_events: Vec<CalendarEvent>,
+    calendar_status: String,
+    calendar_cmd_tx: mpsc::Sender<CalendarCommand>,
+    installed_fonts: Vec<InstalledFont>,
+    font_search: String,
+    dirty_from_ui: bool,
+    config_dirty_out: bool,
+    test_notif_out: bool,
+}
+
+fn shared_settings_state() -> &'static Arc<Mutex<Option<DeferredSettingsState>>> {
+    static STATE: OnceLock<Arc<Mutex<Option<DeferredSettingsState>>>> = OnceLock::new();
+    STATE.get_or_init(|| Arc::new(Mutex::new(None)))
+}
+
 pub fn render_settings_viewport(ctx: &egui::Context, st: SettingsWindowState<'_>) {
-    if !*st.open {
-        return;
+    let shared = Arc::clone(shared_settings_state());
+    {
+        let Ok(mut guard) = shared.lock() else {
+            return;
+        };
+        if let Some(ds) = guard.as_mut() {
+            if ds.dirty_from_ui {
+                *st.open = ds.open;
+                *st.focus_requested = ds.focus_requested;
+                *st.tab = ds.tab;
+                *st.config = ds.config.clone();
+                *st.todos = ds.todos.clone();
+                *st.new_todo_input = ds.new_todo_input.clone();
+                *st.calendar_url_input = ds.calendar_url_input.clone();
+                *st.installed_fonts = ds.installed_fonts.clone();
+                *st.font_search = ds.font_search.clone();
+                if ds.config_dirty_out {
+                    *st.config_dirty = true;
+                }
+                if ds.test_notif_out {
+                    *st.test_notification_requested = true;
+                }
+                ds.dirty_from_ui = false;
+                ds.config_dirty_out = false;
+                ds.test_notif_out = false;
+            }
+            if !*st.open {
+                *guard = None;
+                return;
+            }
+            ds.open = *st.open;
+            ds.focus_requested = *st.focus_requested;
+            ds.tab = *st.tab;
+            ds.config = st.config.clone();
+            ds.todos = st.todos.clone();
+            ds.new_todo_input = st.new_todo_input.clone();
+            ds.calendar_url_input = st.calendar_url_input.clone();
+            if ds.calendar_status != st.calendar_status
+                || ds.calendar_events.len() != st.calendar_events.len()
+            {
+                ds.calendar_events = st.calendar_events.to_vec();
+                ds.calendar_status = st.calendar_status.to_owned();
+            }
+            ds.calendar_cmd_tx = st.calendar_cmd_tx.clone();
+            if ds.installed_fonts.len() != st.installed_fonts.len() {
+                ds.installed_fonts = st.installed_fonts.clone();
+            }
+            ds.font_search = st.font_search.clone();
+        } else {
+            if !*st.open {
+                return;
+            }
+            *guard = Some(DeferredSettingsState {
+                open: *st.open,
+                focus_requested: *st.focus_requested,
+                tab: *st.tab,
+                config: st.config.clone(),
+                todos: st.todos.clone(),
+                new_todo_input: st.new_todo_input.clone(),
+                calendar_url_input: st.calendar_url_input.clone(),
+                calendar_events: st.calendar_events.to_vec(),
+                calendar_status: st.calendar_status.to_owned(),
+                calendar_cmd_tx: st.calendar_cmd_tx.clone(),
+                installed_fonts: st.installed_fonts.clone(),
+                font_search: st.font_search.clone(),
+                dirty_from_ui: false,
+                config_dirty_out: false,
+                test_notif_out: false,
+            });
+        }
     }
 
-    ctx.show_viewport_immediate(
+    let root_ctx = ctx.clone();
+    ctx.show_viewport_deferred(
         ViewportId::from_hash_of("liebert_settings"),
         ViewportBuilder::default()
             .with_title(SETTINGS_WINDOW_TITLE)
@@ -51,45 +143,83 @@ pub fn render_settings_viewport(ctx: &egui::Context, st: SettingsWindowState<'_>
             .with_inner_size([450.0, 540.0])
             .with_active(true)
             .with_resizable(true),
-        |ui, _class| {
-            if ui.input(|i| i.viewport().close_requested()) {
-                *st.open = false;
-                *st.focus_requested = false;
+        move |ui, _class| {
+            let Ok(mut guard) = shared.lock() else {
+                return;
+            };
+            let Some(ds) = guard.as_mut() else {
+                return;
+            };
+            if !ds.open {
                 return;
             }
-            if *st.focus_requested {
+            if ui.input(|i| i.viewport().close_requested()) {
+                ds.open = false;
+                ds.focus_requested = false;
+                ds.dirty_from_ui = true;
+                root_ctx.request_repaint();
+                return;
+            }
+            if ds.focus_requested {
                 ui.ctx()
                     .send_viewport_cmd(egui::ViewportCommand::Minimized(false));
                 ui.ctx()
                     .send_viewport_cmd(egui::ViewportCommand::Visible(true));
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);
-                *st.focus_requested = false;
+                ds.focus_requested = false;
+                ds.dirty_from_ui = true;
             }
 
-            apply_settings_theme(ui, st.config.accent_color);
+            apply_settings_theme(ui, ds.config.accent_color);
             let panel_frame = egui::Frame::new()
                 .fill(Color32::from_rgb(19, 19, 23))
                 .inner_margin(egui::Margin::same(14));
 
+            let mut local_config_dirty = false;
+            let mut local_test_notif = false;
+            let prev_tab = ds.tab;
+            let prev_new_todo = ds.new_todo_input.clone();
+            let prev_cal_url = ds.calendar_url_input.clone();
+            let prev_font_search = ds.font_search.clone();
+            let prev_todo_len = ds.todos.items.len();
+
             egui::CentralPanel::default().frame(panel_frame).show(ui, |ui| {
-                render_settings_tabs_body(ui, &mut SettingsBodyState {
-                    tab: st.tab,
-                    config: st.config,
-                    todos: st.todos,
-                    new_todo_input: st.new_todo_input,
-                    calendar_url_input: st.calendar_url_input,
-                    calendar_events: st.calendar_events,
-                    calendar_status: st.calendar_status,
-                    calendar_cmd_tx: Some(st.calendar_cmd_tx),
-                    config_dirty: st.config_dirty,
-                    todos_dirty: &mut false,
-                    test_notification_requested: st.test_notification_requested,
-                    calendar_set_url_requested: &mut None,
-                    calendar_refresh_requested: &mut false,
-                    installed_fonts: st.installed_fonts,
-                    font_search: st.font_search,
-                });
+                let ds = &mut *ds;
+                render_settings_tabs_body(
+                    ui,
+                    &mut SettingsBodyState {
+                        tab: &mut ds.tab,
+                        config: &mut ds.config,
+                        todos: &mut ds.todos,
+                        new_todo_input: &mut ds.new_todo_input,
+                        calendar_url_input: &mut ds.calendar_url_input,
+                        calendar_events: &ds.calendar_events,
+                        calendar_status: &ds.calendar_status,
+                        calendar_cmd_tx: Some(&ds.calendar_cmd_tx),
+                        config_dirty: &mut local_config_dirty,
+                        todos_dirty: &mut false,
+                        test_notification_requested: &mut local_test_notif,
+                        calendar_set_url_requested: &mut None,
+                        calendar_refresh_requested: &mut false,
+                        installed_fonts: &mut ds.installed_fonts,
+                        font_search: &mut ds.font_search,
+                    },
+                );
             });
+
+            if local_config_dirty
+                || local_test_notif
+                || ds.tab != prev_tab
+                || ds.new_todo_input != prev_new_todo
+                || ds.calendar_url_input != prev_cal_url
+                || ds.font_search != prev_font_search
+                || ds.todos.items.len() != prev_todo_len
+            {
+                ds.config_dirty_out |= local_config_dirty;
+                ds.test_notif_out |= local_test_notif;
+                ds.dirty_from_ui = true;
+                root_ctx.request_repaint();
+            }
         },
     );
 }
@@ -819,6 +949,12 @@ fn render_calendar_tab(ui: &mut egui::Ui, st: &mut SettingsBodyState<'_>) {
             } else {
                 *st.calendar_refresh_requested = true;
             }
+        }
+        if ui
+            .add_enabled(!st.calendar_url_input.trim().is_empty(), egui::Button::new("Copy"))
+            .clicked()
+        {
+            ui.ctx().copy_text(st.calendar_url_input.trim().to_owned());
         }
         ui.label(RichText::new(st.calendar_status).small());
     });
