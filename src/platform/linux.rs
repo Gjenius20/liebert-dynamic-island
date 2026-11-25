@@ -4,8 +4,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use zbus::zvariant::{OwnedValue, Value};
-use zbus::{Connection, Proxy, connection, interface};
+use zbus::{Connection, Dict, OwnedVariant, Proxy, Variant, connection, interface};
 
 use crate::platform::{MediaCommand, MediaTrack, PlatformEvent};
 use crate::state::{ListenerStatus, NotificationItem};
@@ -34,7 +33,7 @@ impl NotificationServer {
         summary: &str,
         body: &str,
         _actions: Vec<&str>,
-        _hints: HashMap<&str, OwnedValue>,
+        _hints: HashMap<&str, zbus::OwnedVariant>,
         _expire_timeout: i32,
     ) -> u32 {
         let id = if replaces_id != 0 {
@@ -113,15 +112,17 @@ pub fn spawn_listener(tx: mpsc::Sender<PlatformEvent>, on_wake: Arc<dyn Fn() + S
                 on_wake: on_wake.clone(),
             };
 
+            let async_tx = tx.clone();
+            let async_on_wake = on_wake.clone();
             let res = zbus::block_on(async move {
-                let _conn = connection::Builder::session()?
-                    .name("org.freedesktop.Notifications")?
-                    .serve_at("/org/freedesktop/Notifications", server)?
+                let _conn = connection::Builder::session()
+                    .name("org.freedesktop.Notifications")
+                    .serve_at("/org/freedesktop/Notifications", server)
                     .build()
                     .await?;
 
-                let _ = tx.send(PlatformEvent::Status(ListenerStatus::Listening));
-                on_wake();
+                let _ = async_tx.send(PlatformEvent::Status(ListenerStatus::Listening));
+                async_on_wake();
                 pending::<()>().await;
                 Ok::<(), zbus::Error>(())
             });
@@ -220,7 +221,7 @@ async fn read_mpris_track(conn: &Connection, bus: &str) -> Option<MediaTrack> {
     )
     .await
     .ok()?;
-    let all: HashMap<String, OwnedValue> = props
+    let all: HashMap<String, OwnedVariant> = props
         .call("GetAll", &("org.mpris.MediaPlayer2.Player",))
         .await
         .ok()?;
@@ -238,31 +239,29 @@ async fn read_mpris_track(conn: &Connection, bus: &str) -> Option<MediaTrack> {
         .unwrap_or(0);
 
     let meta_val = all.get("Metadata")?;
-    let dict = zbus::zvariant::Dict::try_from(meta_val.downcast_ref::<Value>().ok()?).ok()?;
+    let dict = Dict::try_from(meta_val.downcast_ref::<Variant>().ok()?).ok()?;
 
     let title = dict
-        .get::<&str, Value>(&"xesam:title")
+        .get::<&str, &str>(&"xesam:title")
         .ok()
         .flatten()
-        .and_then(|v| <&str>::try_from(v).ok())
         .map(|s| s.trim().to_owned())?;
     if title.is_empty() {
         return None;
     }
 
     let artist = dict
-        .get::<&str, Value>(&"xesam:artist")
+        .get::<&str, Variant>(&"xesam:artist")
         .ok()
         .flatten()
-        .and_then(|v| Vec::<String>::try_from(v.clone()).ok())
+        .and_then(|v| Vec::<String>::try_from(v).ok())
         .map(|list| list.join(", "))
         .unwrap_or_default();
 
     let duration_ms = dict
-        .get::<&str, Value>(&"mpris:length")
+        .get::<&str, i64>(&"mpris:length")
         .ok()
         .flatten()
-        .and_then(|v| i64::try_from(v).ok())
         .map(|us| (us / 1000).max(0) as u64)
         .unwrap_or(0);
 

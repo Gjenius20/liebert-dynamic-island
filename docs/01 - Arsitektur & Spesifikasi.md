@@ -12,10 +12,10 @@ tags:
 Referensi spesifikasi produk: [[PRD-LiebertDynamicIsland-MVP]].
 
 ## Tech Stack (Aktual)
-- **Bahasa:** Rust (`edition = "2024"`, `rustc 1.99.1`)
+- **Bahasa:** Rust (`edition = "2024"`, `rustc 1.98.1` Linux / `rustc 1.99.1` Windows)
 - **UI / Renderer:** `eframe 0.37` (`egui`, `Renderer::Glow`, fitur `x11` & `wayland`, multi-viewport `show_viewport_immediate` untuk Settings) — lihat [[03 - Catatan Rapat & Keputusan]]
 - **Windows Bridge:** `windows 0.62` — Win32 (`WS_EX_NOACTIVATE`, `WS_EX_TOOLWINDOW`, `GetCursorPos`/`GetWindowRect`, `GetSystemMetrics`, `Win32_Graphics_Gdi` `GetForegroundWindow` + `GetMonitorInfoW`), WinRT `UserNotificationListener`, & WinRT `Media_Control` (SMTC)
-- **Linux Bridge:** `zbus 6.5` (D-Bus `org.freedesktop.Notifications` & MPRIS2 `org.mpris.MediaPlayer2.*`) + windowing `eframe`/`winit` (X11 / Wayland)
+- **Linux Bridge:** `zbus 6.5` (D-Bus `org.freedesktop.Notifications` — builder `session()/name()/serve_at()` mengembalikan `Self`, error ditunda ke `build().await`, hints memakai `OwnedVariant` — & MPRIS2 `org.mpris.MediaPlayer2.*`) + windowing `eframe`/`winit` (X11 / Wayland)
 - **System Tray, Config & Integrations:** `tray-icon 0.27`, `serde` + `serde_json` + `toml 1.2`, `directories 6.0`, `ureq 3.5` (LRCLIB & Google Calendar `.ics`), `chrono 0.4` + `chrono-tz 0.10`
 
 ## Struktur Folder Kode

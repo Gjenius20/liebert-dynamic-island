@@ -9,6 +9,17 @@ tags:
 # 04 - Changelog & Dev Log
 
 ## 2026-11-25
+### Fixed
+- `src/platform/linux.rs`: Menyesuaikan listener notifikasi dan pembaca MPRIS2 (`read_mpris_track`) dengan API `zbus 6.5` (`Builder::session()`, `name()`, dan `serve_at()` mengembalikan `Self`, bukan `Result`; mengganti `OwnedValue`, `Value`, dan `zvariant::Dict` dengan `OwnedVariant`, `Variant`, dan `Dict`; serta memakai `dict.get::<&str, &str>` / `i64` untuk metadata MPRIS2 agar bebas warning/error kompilasi). `cargo test` (19 tests) dan `cargo clippy --all-targets -- -D warnings` lolos di Linux. Lihat [[01 - Arsitektur & Spesifikasi]] dan [[03 - Catatan Rapat & Keputusan]].
+- `src/state.rs`: `ListenerStatus::AccessDenied` ditandai `allow(dead_code)` di luar Windows agar `cargo clippy --all-targets -- -D warnings` bersih (varian hanya diproduksi backend WinRT; kegagalan D-Bus Linux dipetakan ke `Error`). Lihat [[01 - Arsitektur & Spesifikasi]].
+
+### Changed
+- `.gitignore`: Menambahkan `dist/` dan `*.AppImage` untuk output kemasan AppImage Linux.
+- `docs/00 - Dashboard Proyek.md`, `docs/01 - Arsitektur & Spesifikasi.md`, `docs/02 - Daftar Tugas & Backlog.md`, `docs/03 - Catatan Rapat & Keputusan.md`: Menyelesaikan konflik merge dengan `origin/main`, mencatat verifikasi build/spike Linux (`zbus 6.5` + MPRIS2 + `rustc 1.98.1`), serta mempertahankan keputusan `ADR-004` dan `ADR-005`. Lihat [[04 - Changelog & Dev Log]].
+
+### Added
+- `dist/Liebert_Dynamic_Island-0.1.0-x86_64.AppImage` (gitignored): Memaketkan binary release Linux (`x86_64`) menjadi AppImage menggunakan `appimagetool` + `type2-runtime` beserta `.desktop` entry tervalidasi dan ikon `.DirIcon`.
+
 ### Added
 - `src/platform/windows.rs`, `src/platform/mod.rs`, `src/platform/linux.rs`, `src/state.rs`: Menambahkan deteksi aplikasi/game fullscreen di monitor utama (`GetForegroundWindow` + `GetMonitorInfoW`) dan otomatis menyembunyikan Dynamic Island (serta menonaktifkan top-edge hover reveal) selama fullscreen aktif; Linux saat ini menggunakan shortcut `false`.
 - `src/clock.rs`: Menambahkan modul jam digital dengan dukungan zona waktu IANA (`chrono-tz 0.10`), daftar zona waktu umum (`Local`, `UTC`, `Asia/Jakarta`, `Asia/Tokyo`, dll.), format 12h/24h, opsi detik, serta 2 unit test.

@@ -15,12 +15,12 @@ Referensi cakupan fitur: [[PRD-LiebertDynamicIsland-MVP]].
 ### Fase 1: Setup Proyek & Technical Spike
 - [x] Inisialisasi `Cargo.toml` dan skeleton modul (`src/main.rs`, `src/config.rs`, `src/state.rs`, `src/tray.rs`, `src/ui/`, `src/platform/`)
 - [x] Spike Windows: uji `UserNotificationListener::Current()` pada `.exe` unpackaged vs Sparse Package/MSIX manifest *(lulus di `.exe` unpackaged: `Access: Allowed`, `21` active toasts terbaca)*
-- [ ] Spike Linux: uji D-Bus `org.freedesktop.Notifications` (`zbus`) & overlay `wlr-layer-shell` (Wayland) / dock (X11) di environment Linux
+- [ ] Spike Linux: uji D-Bus `org.freedesktop.Notifications` (`zbus`) & overlay `wlr-layer-shell` (Wayland) / dock (X11) di environment Linux *(koneksi D-Bus sesi lolos via `--spike-notifications`, tetapi overlay Wayland/X11 & klaim nama belum diuji manual; nama notifikasi saat ini dipegang daemon lain)*
 - [x] Finalisasi pilihan renderer Rust (`eframe 0.37` + `Renderer::Glow`) di [[03 - Catatan Rapat & Keputusan]]
 
 ### Fase 2: Core Features
 - [x] Definisikan `NotificationItem`, state machine (`Idle` ↔ `Compact` ↔ `Expanded`), dan queue sederhana di `src/state.rs`
-- [ ] Implementasikan bridge Windows WinRT & Linux D-Bus beserta error handling izin/daemon *(Windows terimplementasi & lolos spike; Linux `src/platform/linux.rs` belum dikompilasi/diuji di host Linux)*
+- [ ] Implementasikan bridge Windows WinRT & Linux D-Bus beserta error handling izin/daemon *(Windows terimplementasi & lolos spike; Linux `src/platform/linux.rs` kini lolos build release & spike D-Bus, runtime listener belum diverifikasi karena konflik daemon aktif)*
 - [x] Implementasikan System Tray (`Pause/Resume`, `Auto-hide when idle`, `Exit`) dan persistensi `config.toml` (`%APPDATA%` / `~/.config`)
 
 ### Fase 3: UI & Animation

@@ -22,7 +22,7 @@ Membangun overlay **Dynamic Island** yang ringan (< 25 MB RAM idle), instan (< 5
 
 ## Milestones Utama (MVP)
 - [x] Inisialisasi PRD MVP ([[PRD-LiebertDynamicIsland-MVP]]) & struktur dokumentasi Obsidian
-- [ ] **M1 — Technical Spike:** Windows WinRT & renderer `eframe` terverifikasi; menunggu uji Linux D-Bus & Wayland di host Linux
+- [ ] **M1 — Technical Spike:** Windows WinRT, renderer `eframe`, dan koneksi D-Bus Linux terverifikasi; menunggu uji overlay Wayland/X11 di host Linux
 - [ ] **M2 — Core Overlay:** Implementasi awal `src/ui/mod.rs` selesai; menunggu verifikasi visual, DPI, & Linux overlay
-- [ ] **M3 — Notification Bridge:** Listener Windows & state/queue selesai (7 unit tests pass); menunggu verifikasi runtime Linux
+- [ ] **M3 — Notification Bridge:** Listener Windows & state/queue selesai (7 unit tests pass); build release Linux lolos & spike D-Bus OK, menunggu verifikasi runtime listener Linux (daemon notifikasi lain masih aktif)
 - [ ] **M4 — Tray, Config & Release:** System tray & `config.toml` selesai; menunggu `README.md`, uji manual, & benchmark RAM `--release`
