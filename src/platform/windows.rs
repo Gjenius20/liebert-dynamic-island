@@ -575,21 +575,21 @@ pub fn base_fallback_fonts() -> Vec<FontFileSpec> {
     ]
 }
 
-pub fn cjk_fallback_fonts() -> Vec<FontFileSpec> {
-    vec![
-        FontFileSpec {
+pub fn cjk_fallback_fonts_for(script: super::CjkScript) -> Vec<FontFileSpec> {
+    match script {
+        super::CjkScript::JapaneseOrHan => vec![FontFileSpec {
             name: "win_msgothic".to_owned(),
             path: "C:\\Windows\\Fonts\\msgothic.ttc".to_owned(),
             family: FontFamilyTarget::Both,
             face_indices: &[0],
-        },
-        FontFileSpec {
+        }],
+        super::CjkScript::Korean => vec![FontFileSpec {
             name: "win_malgun".to_owned(),
             path: "C:\\Windows\\Fonts\\malgun.ttf".to_owned(),
             family: FontFamilyTarget::Both,
             face_indices: &[0],
-        },
-    ]
+        }],
+    }
 }
 
 static ORIG_WNDPROC: AtomicIsize = AtomicIsize::new(0);

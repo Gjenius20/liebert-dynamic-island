@@ -10,6 +10,7 @@ tags:
 
 ## 2026-11-26
 ### Added
+- `src/ui/mod.rs`: Menambahkan animasi transisi `visibility_anim` (slide vertikal + fade opacity halus) saat fitur **Auto-hide island when idle** menyembunyikan atau memunculkan kembali pill/notch.
 - `src/config.rs`, `src/platform/windows.rs`, `src/platform/mod.rs`, `src/ui/mod.rs`, `src/ui/settings.rs`: Menambahkan opsi **`hide_in_windowed_fullscreen`** (*"Also hide on windowed fullscreen / maximized apps"*) di Settings di bawah `Hide when a fullscreen app/game is active`, dengan klasifikasi `detect_fullscreen_state` (`exclusive` vs `windowed`) melalui `PlatformEvent::Fullscreen(bool, bool)`.
 - `Cargo.toml`: Menambahkan blok `[package.metadata.packager]` (`product-name`, `identifier`, `version`, `out-dir`, `formats = ["nsis", "wix"]`, `resources = ["README.md"]`) untuk packaging installer Windows `.exe` (NSIS) dan `.msi` (WiX) dengan uninstaller bawaan.
 - `installer/windows/liebert-dynamic-island.iss`, `installer/windows/install.ps1`, `installer/windows/build-setup.ps1`: Menambahkan skrip setup Windows per-user (`%LOCALAPPDATA%\Programs\Liebert Dynamic Island`, tanpa hak Administrator) berupa konfigurasi Inno Setup 6 (`.iss`), builder `build-setup.ps1`, dan installer/uninstaller PowerShell mandiri `install.ps1` (shortcut Start Menu, opsi Desktop & Autostart `HKCU\...\Run`).
@@ -31,6 +32,7 @@ tags:
 - `src/ui/settings.rs`, `src/ui/mod.rs`: Memperbaiki perataan UI dan alur pengetesan: menyamakan lebar penuh tombol `Display Mode` di Settings, memperpendek label checkbox notifikasi agar tombol `"Send Test Notification"` tidak terpotong di lebar jendela `450 px`, serta auto-unpause di `push_test_notification` agar tes popup selalu tampil.
 
 ### Changed
+- `src/platform/mod.rs`, `src/platform/windows.rs`, `src/ui/mod.rs`, `src/lyrics.rs`, `src/calendar.rs`, `src/state.rs`, `src/main.rs`, `Cargo.toml`: Optimasi RAM & performa — pemuatan font CJK per-script (`CjkScript::JapaneseOrHan` vs `Korean`, hemat ~10–13 MB saat lagu JP/KR), `LyricsData` berbasis `Arc<[T]>` + cache FIFO terikat `8` entri tanpa cache `NotFound` + batas HTTP `512 KiB`, batas decode `AlbumArt` (`2048×2048` / `16 MiB` + `into_rgba8()`), batas ICS `2 MiB` + retensi `[-1d..+90d]` + `upcoming_events` tanpa kloning, batas antrean notifikasi `32` item & `body <= 2000` byte, `panic = "abort"` di `[profile.release]`, serta perbaikan argumen `TrayController::new` pada cabang Wayland Linux.
 - `README.md`: Menyusun ulang dokumentasi lengkap proyek menggunakan skill `readme` (Table of Contents, Tech Stack, Prerequisites, Getting Started, Architecture & Data Flow, tabel lengkap `config.toml`, Commands, Testing, Packaging, dan Troubleshooting) sambil mempertahankan preview gambar UI & Settings.
 - `README.md`: Menambahkan bagian preview gambar **UI** dan **Settings** di bagian atas README.
 - `README.md`: Memperbarui tabel konfigurasi (`hide_in_windowed_fullscreen`), struktur modul (`src/ui/icons.rs`), profil release (`codegen-units = 1`), dan instruksi packaging installer Windows via `cargo-packager`.

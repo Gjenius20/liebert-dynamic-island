@@ -45,9 +45,18 @@ pub struct MediaTrack {
 }
 
 pub fn decode_album_art(bytes: &[u8]) -> Option<Arc<AlbumArt>> {
-    let img = image::load_from_memory(bytes).ok()?;
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(2048);
+    limits.max_image_height = Some(2048);
+    limits.max_alloc = Some(16 * 1024 * 1024);
+    reader.limits(limits);
+    let img = reader.decode().ok()?;
     let resized = img.resize(160, 160, image::imageops::FilterType::Triangle);
-    let rgba_img = resized.to_rgba8();
+    drop(img);
+    let rgba_img = resized.into_rgba8();
     let width = rgba_img.width() as usize;
     let height = rgba_img.height() as usize;
     let rgba = rgba_img.into_raw();
@@ -499,15 +508,27 @@ pub fn base_fallback_fonts() -> Vec<FontFileSpec> {
     Vec::new()
 }
 
-pub fn cjk_fallback_fonts() -> Vec<FontFileSpec> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CjkScript {
+    JapaneseOrHan,
+    Korean,
+}
+
+pub fn cjk_fallback_fonts_for(script: CjkScript) -> Vec<FontFileSpec> {
     #[cfg(windows)]
-    return windows::cjk_fallback_fonts();
+    return windows::cjk_fallback_fonts_for(script);
 
     #[cfg(target_os = "linux")]
-    return linux::cjk_fallback_fonts();
+    {
+        let _ = script;
+        linux::cjk_fallback_fonts()
+    }
 
     #[cfg(not(any(windows, target_os = "linux")))]
-    Vec::new()
+    {
+        let _ = script;
+        Vec::new()
+    }
 }
 
 #[cfg(test)]

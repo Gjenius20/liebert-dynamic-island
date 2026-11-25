@@ -84,8 +84,7 @@ fn main() -> ExitCode {
             Ok(()) => return ExitCode::SUCCESS,
             Err(err) => {
                 eprintln!("Warning: Wayland wlr-layer-shell unavailable ({err}), falling back to eframe");
-                let fallback_tray =
-                    TrayController::new(config.auto_hide_when_idle, config.notch_dock_mode).ok();
+                let fallback_tray = TrayController::new(config.auto_hide_when_idle).ok();
                 return run_eframe_overlay(
                     config,
                     fallback_tray,

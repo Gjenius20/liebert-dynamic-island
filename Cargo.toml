@@ -52,6 +52,7 @@ lto = "thin"
 strip = true
 opt-level = "s"
 codegen-units = 1
+panic = "abort"
 
 [package.metadata.packager]
 product-name = "Liebert Dynamic Island"

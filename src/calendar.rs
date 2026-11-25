@@ -123,8 +123,8 @@ pub fn upcoming_events(
     events: &[CalendarEvent],
     now_utc: i64,
     limit: usize,
-) -> Vec<CalendarEvent> {
-    let mut upcoming: Vec<CalendarEvent> = events
+) -> Vec<&CalendarEvent> {
+    let mut upcoming: Vec<&CalendarEvent> = events
         .iter()
         .filter(|ev| {
             if ev.end_utc > ev.start_utc {
@@ -133,7 +133,6 @@ pub fn upcoming_events(
                 ev.start_utc >= now_utc - 600
             }
         })
-        .cloned()
         .collect();
     upcoming.sort_by_key(|ev| ev.start_utc);
     upcoming.truncate(limit);
@@ -206,6 +205,7 @@ pub fn spawn_calendar_worker(
 }
 
 fn fetch_ics(agent: &Agent, url: &str) -> Result<Vec<CalendarEvent>, String> {
+    const MAX_ICS_BYTES: u64 = 2 * 1024 * 1024;
     if !(url.starts_with("https://") || url.starts_with("http://")) {
         return Err("Invalid URL (must start with https:// or http://)".to_owned());
     }
@@ -215,9 +215,17 @@ fn fetch_ics(agent: &Agent, url: &str) -> Result<Vec<CalendarEvent>, String> {
         .call()
         .map_err(|e| format!("Sync error: {e}"))?
         .body_mut()
+        .with_config()
+        .limit(MAX_ICS_BYTES)
         .read_to_string()
         .map_err(|e| format!("Read error: {e}"))?;
-    Ok(parse_ics(&body))
+    let now_utc = chrono::Utc::now().timestamp();
+    let min_ts = now_utc - 86_400;
+    let max_ts = now_utc + 90 * 86_400;
+    let mut events = parse_ics(&body);
+    events.retain(|ev| ev.end_utc.max(ev.start_utc) >= min_ts && ev.start_utc <= max_ts);
+    events.sort_by_key(|ev| ev.start_utc);
+    Ok(events)
 }
 
 #[cfg(test)]

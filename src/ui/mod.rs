@@ -20,12 +20,10 @@ use crate::calendar::{
 };
 use crate::clock::format_clock;
 use crate::config::{Config, IdleDisplayMode, KaraokeLyricMode};
-use crate::lyrics::{
-    LyricsData, LyricsRequest, active_karaoke, has_cjk_or_hangul,
-};
+use crate::lyrics::{LyricsData, LyricsRequest, active_karaoke};
 use crate::platform::{
-    self, FontFamilyTarget, FontFileSpec, HoverPollInput, InstalledFont, MediaCommand, MediaTrack,
-    PlatformEvent, RepeatMode,
+    self, CjkScript, FontFamilyTarget, FontFileSpec, HoverPollInput, InstalledFont, MediaCommand,
+    MediaTrack, PlatformEvent, RepeatMode,
 };
 use crate::pomodoro::{PomodoroPhase, PomodoroTimer};
 use crate::state::{IslandState, IslandVisualState, ListenerStatus, NotificationItem};
@@ -160,7 +158,7 @@ pub struct IslandApp {
     album_art_key: Option<(String, String)>,
     gradient_tex: Option<TextureHandle>,
     gradient_key: Option<([u8; 4], [u8; 3], bool)>,
-    cjk_fonts_loaded: bool,
+    loaded_cjk_scripts: u8,
     todos: TodoStore,
     calendar_events: Vec<CalendarEvent>,
     calendar_status: String,
@@ -176,6 +174,7 @@ pub struct IslandApp {
     applied_window_size: Vec2,
     last_passthrough: Option<bool>,
     notch_morph: f32,
+    visibility_anim: f32,
     test_notif_seq: u32,
     last_frame: Instant,
     last_fullscreen_exclusive: bool,
@@ -231,7 +230,7 @@ impl IslandApp {
             album_art_key: None,
             gradient_tex: None,
             gradient_key: None,
-            cjk_fonts_loaded: false,
+            loaded_cjk_scripts: 0,
             todos: TodoStore::load(),
             calendar_events: Vec::new(),
             calendar_status: if calendar_url_input.is_empty() {
@@ -251,6 +250,7 @@ impl IslandApp {
             applied_window_size: Vec2::ZERO,
             last_passthrough: None,
             notch_morph,
+            visibility_anim: 1.0,
             test_notif_seq: 0,
             last_frame: now,
             last_fullscreen_exclusive: false,
@@ -376,13 +376,33 @@ impl IslandApp {
         size
     }
 
-    fn ensure_cjk_font_loaded(&mut self, ctx: &egui::Context) {
-        if self.cjk_fonts_loaded {
+    fn ensure_cjk_font_loaded_for_text(&mut self, ctx: &egui::Context, text: &str) {
+        if self.loaded_cjk_scripts == 0b11 {
             return;
         }
-        self.cjk_fonts_loaded = true;
-        for spec in platform::cjk_fallback_fonts() {
-            load_font_spec(ctx, &spec);
+        let mut need_jp_han = false;
+        let mut need_kr = false;
+        for ch in text.chars() {
+            match ch as u32 {
+                0xAC00..=0xD7AF | 0x1100..=0x11FF | 0x3130..=0x318F => need_kr = true,
+                0x3040..=0x30FF | 0x3400..=0x4DBF | 0x4E00..=0x9FFF => need_jp_han = true,
+                _ => {}
+            }
+            if need_jp_han && need_kr {
+                break;
+            }
+        }
+        if need_jp_han && (self.loaded_cjk_scripts & 0b01) == 0 {
+            self.loaded_cjk_scripts |= 0b01;
+            for spec in platform::cjk_fallback_fonts_for(CjkScript::JapaneseOrHan) {
+                load_font_spec(ctx, &spec);
+            }
+        }
+        if need_kr && (self.loaded_cjk_scripts & 0b10) == 0 {
+            self.loaded_cjk_scripts |= 0b10;
+            for spec in platform::cjk_fallback_fonts_for(CjkScript::Korean) {
+                load_font_spec(ctx, &spec);
+            }
         }
     }
 
@@ -477,9 +497,8 @@ impl IslandApp {
                     {
                         let key = (artist.clone(), title.clone());
                         if self.last_lyrics_key.as_ref() != Some(&key) {
-                            if has_cjk_or_hangul(&title) || has_cjk_or_hangul(&artist) {
-                                self.ensure_cjk_font_loaded(ctx);
-                            }
+                            self.ensure_cjk_font_loaded_for_text(ctx, &title);
+                            self.ensure_cjk_font_loaded_for_text(ctx, &artist);
                             self.last_lyrics_key = Some(key);
                             self.request_lyrics_for_current();
                         }
@@ -494,17 +513,24 @@ impl IslandApp {
                     lyrics,
                 } => {
                     if self.last_lyrics_key.as_ref() == Some(&(artist, title)) {
-                        let has_cjk = match &lyrics {
+                        match &lyrics {
                             LyricsData::Synced(lines) => {
-                                lines.iter().any(|l| has_cjk_or_hangul(&l.text))
+                                for l in lines.iter() {
+                                    self.ensure_cjk_font_loaded_for_text(ctx, &l.text);
+                                    if self.loaded_cjk_scripts == 0b11 {
+                                        break;
+                                    }
+                                }
                             }
                             LyricsData::Plain(lines) => {
-                                lines.iter().any(|l| has_cjk_or_hangul(&l.text))
+                                for l in lines.iter() {
+                                    self.ensure_cjk_font_loaded_for_text(ctx, &l.text);
+                                    if self.loaded_cjk_scripts == 0b11 {
+                                        break;
+                                    }
+                                }
                             }
-                            _ => false,
-                        };
-                        if has_cjk {
-                            self.ensure_cjk_font_loaded(ctx);
+                            _ => {}
                         }
                         self.lyrics = lyrics;
                     }
@@ -566,7 +592,7 @@ impl IslandApp {
                             NotificationItem {
                                 id: format!("cal-{}-{}", ev.start_utc, ev.summary),
                                 app_name: "Google Calendar".to_owned(),
-                                title: ev.summary,
+                                title: ev.summary.clone(),
                                 body: format!(
                                     "{} • {}",
                                     format_local_time(ev.start_utc),
@@ -873,7 +899,19 @@ impl IslandApp {
 
         self.state.tick(now);
 
-        let visible = self.state.should_be_visible(now);
+        let want_visible = self.state.should_be_visible(now);
+        let target_vis = if want_visible { 1.0 } else { 0.0 };
+        let vis_diff = target_vis - self.visibility_anim;
+        let vis_animating = vis_diff.abs() >= 0.004;
+        if vis_animating {
+            self.visibility_anim += vis_diff * (1.0 - (-15.0 * dt).exp());
+            if (target_vis - self.visibility_anim).abs() < 0.004 {
+                self.visibility_anim = target_vis;
+            }
+        } else {
+            self.visibility_anim = target_vis;
+        }
+        let visible = want_visible || self.visibility_anim > 0.01;
         let became_visible = visible && !self.last_visible;
         if visible != self.last_visible {
             self.last_visible = visible;
@@ -929,7 +967,7 @@ impl IslandApp {
             platform::pin_window_top_y(WINDOW_TITLE, 0);
         }
 
-        let passthrough = !self.last_visible || !hovered;
+        let passthrough = !want_visible || !hovered;
         if self.last_passthrough != Some(passthrough) {
             self.last_passthrough = Some(passthrough);
             platform::set_overlay_click_through(WINDOW_TITLE, passthrough);
@@ -971,7 +1009,8 @@ impl IslandApp {
             && self.config.clock_show_seconds;
         let pomodoro_running = self.pomodoro.running;
 
-        let repaint_after = if animating || morphing || hover_changed || fs_changed {
+        let repaint_after =
+            if animating || morphing || vis_animating || hover_changed || fs_changed {
             Duration::ZERO
         } else if playing_lyrics && self.config.karaoke_lyrics {
             Duration::from_millis(33)
@@ -1060,14 +1099,21 @@ impl IslandApp {
             && self.active_tab == IslandTab::Music
             && self.media.is_some();
 
+        let vis = self.visibility_anim.clamp(0.0, 1.0);
+        if vis <= 0.005 {
+            return;
+        }
+
         let top_y = self.effective_top_offset();
+        let slide_y = -((self.current_size.y + top_y) * (1.0 - vis)) * 0.65;
+        let border_alpha = ((border_alpha as f32) * vis).round() as u8;
 
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
             .show(ui, |ui| {
                 let canvas = ui.max_rect();
                 let card_x = canvas.left() + ((canvas.width() - self.current_size.x) * 0.5).max(0.0);
-                let card_y = canvas.top() + top_y;
+                let card_y = canvas.top() + top_y + slide_y;
                 let card_rect = Rect::from_min_size(Pos2::new(card_x, card_y), self.current_size);
                 self.last_egui_hovered = ui.rect_contains_pointer(card_rect);
 
@@ -1076,7 +1122,7 @@ impl IslandApp {
                         self.config.bg_color[0],
                         self.config.bg_color[1],
                         self.config.bg_color[2],
-                        self.config.bg_color[3].max(235),
+                        ((self.config.bg_color[3].max(235) as f32) * vis).round() as u8,
                     ];
                     let accent_rgb = self.effective_accent_rgb();
                     self.ensure_gradient_texture(&ctx, base_bg, accent_rgb, self.notch_morph < 0.5);
@@ -1096,7 +1142,13 @@ impl IslandApp {
                     );
                     (16.0 + ear_w, 10.0)
                 } else {
-                    let fill = self.bg_color32();
+                    let base = self.bg_color32();
+                    let fill = Color32::from_rgba_unmultiplied(
+                        base.r(),
+                        base.g(),
+                        base.b(),
+                        ((base.a() as f32) * vis).round() as u8,
+                    );
                     paint_island_surface(
                         ui.painter(),
                         card_rect,
@@ -1121,6 +1173,7 @@ impl IslandApp {
                 if inner_rect.width() >= 10.0 && inner_rect.height() >= 8.0 {
                     ui.scope_builder(egui::UiBuilder::new().max_rect(inner_rect), |ui| {
                         ui.set_clip_rect(card_rect);
+                        ui.multiply_opacity(vis);
                         match self.state.visual {
                             IslandVisualState::Expanded => {
                                 let expand_alpha = ((self.current_size.y - 60.0 * self.config.scale)
@@ -1186,7 +1239,7 @@ impl IslandApp {
             if self.config.font_name != self.applied_font_name {
                 self.applied_font_name = self.config.font_name.clone();
                 apply_configured_fonts(&ctx, &self.applied_font_name);
-                self.cjk_fonts_loaded = false;
+                self.loaded_cjk_scripts = 0;
             }
             self.pomodoro.sync_durations(
                 self.config.pomodoro_focus_mins,
