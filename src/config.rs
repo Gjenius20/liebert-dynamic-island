@@ -243,7 +243,7 @@ mod tests {
         let mut cfg = Config {
             auto_hide_when_idle: true,
             auto_hide_delay_secs: 12,
-            hide_in_fullscreen: false,
+            hide_in_fullscreen: true,
             show_notifications: false,
             compact_album_gradient: false,
             show_pill_translation: false,

@@ -2,13 +2,14 @@ mod icons;
 mod settings;
 
 use std::collections::HashSet;
-use std::f32::consts::FRAC_PI_2;
+use std::f32::consts::{FRAC_PI_2, PI};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use eframe::egui::{
-    self, Color32, ColorImage, CornerRadius, FontId, Mesh, Pos2, Rect, RichText, Sense, Shape,
-    Stroke, StrokeKind, TextureHandle, TextureOptions, Vec2, ViewportCommand,
+    self, Color32, ColorImage, CornerRadius, CursorIcon, FontId, Mesh, Pos2, Rect, RichText,
+    Sense, Shape, Stroke, StrokeKind, TextureHandle, TextureId, TextureOptions, Vec2,
+    ViewportCommand,
     text::{LayoutJob, TextFormat},
 };
 use eframe::epaint::{RectShape, Vertex, WHITE_UV};
@@ -22,19 +23,20 @@ use crate::config::{Config, IdleDisplayMode, KaraokeLyricMode};
 use crate::lyrics::{
     LyricsData, LyricsRequest, active_karaoke, has_cjk_or_hangul,
 };
-use crate::platform::{self, InstalledFont, MediaCommand, MediaTrack, PlatformEvent, RepeatMode};
-use crate::pomodoro::{PomodoroPhase, PomodoroTimer};
 use crate::platform::{
-    self, FontFamilyTarget, FontFileSpec, HoverPollInput, MediaCommand, MediaTrack, PlatformEvent,
-    RepeatMode,
+    self, FontFamilyTarget, FontFileSpec, HoverPollInput, InstalledFont, MediaCommand, MediaTrack,
+    PlatformEvent, RepeatMode,
 };
+use crate::pomodoro::{PomodoroPhase, PomodoroTimer};
 use crate::state::{IslandState, IslandVisualState, ListenerStatus, NotificationItem};
 use crate::todo::TodoStore;
 use crate::tray::{TrayAction, TrayController};
 use crate::ui::icons::{IconKind, icon_button, paint_icon};
 #[cfg(target_os = "linux")]
-pub use crate::ui::settings::{SETTINGS_WINDOW_TITLE, run_standalone_settings};
-use crate::ui::settings::{SettingsTab, SettingsWindowState, render_settings_viewport};
+pub use crate::ui::settings::run_standalone_settings;
+use crate::ui::settings::{
+    SETTINGS_WINDOW_TITLE, SettingsTab, SettingsWindowState, render_settings_viewport,
+};
 
 pub const WINDOW_TITLE: &str = "Liebert Dynamic Island";
 
@@ -55,6 +57,8 @@ pub fn apply_configured_fonts(ctx: &egui::Context, font_name: &str) {
     }
     ctx.set_fonts(defs);
     install_base_fallback_fonts(ctx);
+}
+
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OverlayBackendMode {
@@ -689,12 +693,12 @@ impl IslandApp {
             .set_auto_hide_delay(Duration::from_secs(self.config.auto_hide_delay_secs));
         self.state
             .set_hide_in_fullscreen(self.config.hide_in_fullscreen);
-        self.last_fullscreen_check = now - Duration::from_secs(1);
+        self.state
+            .set_fullscreen_active(self.config.hide_in_fullscreen && self.last_fullscreen_raw);
         self.state
             .set_collapse_timeout(Duration::from_secs(self.config.collapse_timeout_secs));
         if let Some(tray) = &self.tray {
             tray.set_auto_hide_checked(self.config.auto_hide_when_idle);
-            tray.update_dock_mode(self.config.notch_dock_mode);
         }
     }
 
@@ -807,52 +811,60 @@ impl IslandApp {
         // bounds and top-edge trigger zone so envelope animations stay completely glitch-free.
         let top_y = self.effective_top_offset();
         let ppp = ctx.pixels_per_point().max(1.0);
-        let screen_w = platform::primary_monitor_logical_width() / ppp;
+        let screen_w = platform::primary_monitor_logical_width(ppp);
         let trigger_w = self.config.idle_width.max(180.0) * self.config.scale;
-        let top_trigger = platform::is_cursor_in_top_trigger(top_y, trigger_w, ppp);
-        let hovered = if self.state.hide_in_fullscreen
-            && self.state.fullscreen_active
-            && self.state.active.is_none()
-        {
         let pointer_busy = ctx.input(|i| i.pointer.any_down());
         let ctx_hovered = external_hovered
             || self.last_egui_hovered
             || ctx.input(|i| i.pointer.hover_pos().is_some());
         let is_animating_prev = (self.target_size() - self.current_size).length_sq() > 0.25;
-        let hovered = if self.state.hide_in_fullscreen && self.state.fullscreen_active {
+        let hovered = if self.state.hide_in_fullscreen
+            && self.state.fullscreen_active
+            && self.state.active.is_none()
+        {
             false
+        } else if !self.last_visible {
+            platform::is_cursor_in_top_trigger(top_y, trigger_w, ppp).unwrap_or(false)
         } else {
             let pill_x = ((screen_w - self.current_size.x) * 0.5).max(0.0);
             let pad = if self.state.hovered { 8.0 } else { 2.0 };
-            let over_pill = platform::is_cursor_in_screen_rect(
+            let win_over = platform::is_cursor_in_screen_rect(
                 ((pill_x - pad) * ppp) as i32,
                 ((top_y - pad) * ppp).max(0.0) as i32,
                 ((pill_x + self.current_size.x + pad) * ppp) as i32,
                 ((top_y + self.current_size.y + pad) * ppp) as i32,
-            )
-            .unwrap_or(self.last_egui_hovered);
-            over_pill || (self.state.hovered && top_trigger.unwrap_or(false))
-            platform::detect_overlay_hover(HoverPollInput {
-                window_title: WINDOW_TITLE,
-                ctx_hovered,
-                pointer_busy,
-                currently_hovered: self.state.hovered,
-                visible: self.last_visible,
-                animating: is_animating_prev || morphing,
-                top_offset_px: top_y,
-                trigger_width_px: trigger_w,
-                pixels_per_point: ctx.pixels_per_point(),
-            })
+            );
+            match win_over {
+                Some(over_pill) => {
+                    over_pill
+                        || (self.state.hovered
+                            && platform::is_cursor_in_top_trigger(top_y, trigger_w, ppp)
+                                .unwrap_or(false))
+                }
+                None => platform::detect_overlay_hover(HoverPollInput {
+                    window_title: WINDOW_TITLE,
+                    ctx_hovered,
+                    pointer_busy,
+                    currently_hovered: self.state.hovered,
+                    visible: self.last_visible,
+                    animating: is_animating_prev || morphing,
+                    top_offset_px: top_y,
+                    trigger_width_px: trigger_w,
+                    pixels_per_point: ctx.pixels_per_point(),
+                }),
+            }
         };
         let hover_changed = self.state.set_hovered(hovered, now);
 
         self.state.tick(now);
 
         let visible = self.state.should_be_visible(now);
+        let became_visible = visible && !self.last_visible;
         if visible != self.last_visible {
             self.last_visible = visible;
-            if !platform::set_overlay_visible(WINDOW_TITLE, visible) {
-            if mode == OverlayBackendMode::Eframe {
+            if mode == OverlayBackendMode::Eframe
+                && !platform::set_overlay_visible(WINDOW_TITLE, visible)
+            {
                 ctx.send_viewport_cmd(ViewportCommand::Visible(visible));
             }
         }
@@ -906,7 +918,9 @@ impl IslandApp {
         if self.last_passthrough != Some(passthrough) {
             self.last_passthrough = Some(passthrough);
             platform::set_overlay_click_through(WINDOW_TITLE, passthrough);
+        }
         let rounded_size = Vec2::new(self.current_size.x.round(), self.current_size.y.round());
+        #[cfg(target_os = "linux")]
         if mode == OverlayBackendMode::Eframe
             && ((rounded_size - self.applied_size).length_sq() > 0.25
                 || (top_y - self.applied_top_y).abs() > 0.25
@@ -947,12 +961,10 @@ impl IslandApp {
         } else if playing_lyrics && self.config.karaoke_lyrics {
             Duration::from_millis(33)
         } else if showing_idle_bars {
-            ctx.request_repaint_after(Duration::from_millis(50));
+            Duration::from_millis(50)
         } else if (self.state.hide_in_fullscreen
             && self.state.fullscreen_active
             && self.state.active.is_none())
-            Duration::from_millis(50)
-        } else if (self.state.hide_in_fullscreen && self.state.fullscreen_active)
             || playing_lyrics
             || showing_live_seconds
             || pomodoro_running
@@ -1033,96 +1045,7 @@ impl IslandApp {
             && self.active_tab == IslandTab::Music
             && self.media.is_some();
 
-        let ear_w = self.notch_ear_width();
         let top_y = self.effective_top_offset();
-        let frame = if is_music_card {
-            let floating_bg = [30, 29, 28, self.config.bg_color[3].max(240)];
-            let docked_bg = [12, 12, 14, 252];
-            let base_bg = [
-                lerp_u8(floating_bg[0], docked_bg[0], self.notch_morph),
-                lerp_u8(floating_bg[1], docked_bg[1], self.notch_morph),
-                lerp_u8(floating_bg[2], docked_bg[2], self.notch_morph),
-                lerp_u8(floating_bg[3], docked_bg[3], self.notch_morph),
-            ];
-            let accent_rgb = self.effective_accent_rgb();
-            self.ensure_gradient_texture(&ctx, base_bg, accent_rgb, false);
-            paint_island_surface(
-                ui.painter(),
-                card_rect,
-                SurfaceStyle {
-                    ear_w,
-                    top_radius,
-                    bot_radius,
-                    fill: Color32::from_rgba_unmultiplied(
-                        base_bg[0], base_bg[1], base_bg[2], base_bg[3],
-                    ),
-                    grad_tex: self.gradient_tex.as_ref(),
-                    border_alpha,
-                },
-            );
-            let pad_x = (16.0 + ear_w).round() as i8;
-            egui::Frame::NONE.inner_margin(egui::Margin::symmetric(pad_x, 10))
-        } else {
-            let pill_album_rgb = if matches!(
-                self.state.visual,
-                IslandVisualState::Idle | IslandVisualState::Compact
-            ) && self.config.compact_album_gradient
-                && self.config.show_lyrics
-            {
-                self.media
-                    .as_ref()
-                    .and_then(|m| m.album_art.as_ref().and_then(|a| a.dominant_rgb))
-            } else {
-                None
-            };
-
-            let (fill, grad_tex) = if let Some(album_rgb) = pill_album_rgb {
-                let alpha = if self.state.visual == IslandVisualState::Idle {
-                    lerp_u8(self.config.bg_color[3].max(240), 252, self.notch_morph)
-                } else {
-                    self.config.bg_color[3].max(240)
-                };
-                let base_black = [0, 0, 0, alpha];
-                self.ensure_gradient_texture(&ctx, base_black, album_rgb, true);
-                (
-                    Color32::from_rgba_unmultiplied(0, 0, 0, alpha),
-                    self.gradient_tex.as_ref(),
-                )
-            } else {
-                let base = self.bg_color32();
-                let fill = if self.state.visual == IslandVisualState::Idle {
-                    Color32::from_rgba_unmultiplied(
-                        lerp_u8(base.r(), 7, self.notch_morph),
-                        lerp_u8(base.g(), 7, self.notch_morph),
-                        lerp_u8(base.b(), 9, self.notch_morph),
-                        lerp_u8(base.a(), 252, self.notch_morph),
-                    )
-                } else {
-                    base
-                };
-                (fill, None)
-            };
-
-            paint_island_surface(
-                ui.painter(),
-                card_rect,
-                SurfaceStyle {
-                    ear_w,
-                    top_radius,
-                    bot_radius,
-                    fill,
-                    grad_tex,
-                    border_alpha,
-                },
-            );
-            let pad_x = (13.0 + ear_w).round() as i8;
-            let pad_y = if self.state.visual == IslandVisualState::Idle {
-                5
-            } else {
-                9
-            };
-            egui::Frame::NONE.inner_margin(egui::Margin::symmetric(pad_x, pad_y))
-        };
 
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
@@ -1141,7 +1064,7 @@ impl IslandApp {
                         self.config.bg_color[3].max(235),
                     ];
                     let accent_rgb = self.effective_accent_rgb();
-                    self.ensure_gradient_texture(&ctx, base_bg, accent_rgb);
+                    self.ensure_gradient_texture(&ctx, base_bg, accent_rgb, self.notch_morph < 0.5);
                     paint_island_surface(
                         ui.painter(),
                         card_rect,
@@ -1358,26 +1281,12 @@ impl IslandApp {
                         }
 
                         let bars_w = 18.0 * s;
-                        let gap = 6.0 * s;
-                        let text_w = (ui.available_width() - bars_w - gap).max(40.0);
                         ui.add_space(3.0 * s);
                         let bars_reserve = 22.0 * s;
                         let text_w = (ui.available_width() - bars_reserve).max(40.0);
-                        let pill_tr = if self.config.show_pill_translation
-                            && self.config.translate_lyrics
-                        {
-                            active.and_then(|k| k.translation)
-                        } else {
-                            None
-                        };
-                        let text_col_h = if pill_tr.is_some() {
-                            32.0 * s
-                        } else {
-                            20.0 * s
-                        };
                         ui.allocate_ui_with_layout(
-                            Vec2::new(text_w, text_col_h),
-                            egui::Layout::top_down(egui::Align::LEFT),
+                            Vec2::new(text_w, 20.0 * s),
+                            egui::Layout::left_to_right(egui::Align::Center),
                             |ui| {
                                 ui.set_clip_rect(ui.max_rect());
                                 ui.spacing_mut().item_spacing.x = 4.0 * s;
@@ -1409,67 +1318,27 @@ impl IslandApp {
                                             muted,
                                             text_col,
                                         );
-                                ui.spacing_mut().item_spacing.y = 1.0 * s;
-                                ui.horizontal(|ui| {
-                                    let (note_rect, _) = ui.allocate_exact_size(
-                                        Vec2::splat(11.0 * s),
-                                        Sense::hover(),
-                                    );
-                                    paint_icon(ui.painter(), note_rect, IconKind::MusicNote, muted);
-                                    if let Some(k) = active {
-                                        let lyric_text = if self.config.karaoke_lyric_mode
-                                            == KaraokeLyricMode::Romaji
-                                        {
-                                            k.romaji.unwrap_or(k.text)
-                                        } else {
-                                            k.text
-                                        };
-                                        if self.config.karaoke_lyrics {
-                                            render_karaoke_line(
-                                                ui,
-                                                lyric_text,
-                                                k.progress,
-                                                FontId::proportional(11.5 * s),
-                                                muted,
-                                                text_col,
-                                            );
-                                        } else {
-                                            ui.add(
-                                                egui::Label::new(
-                                                    RichText::new(lyric_text)
-                                                        .font(FontId::proportional(11.5 * s))
-                                                        .color(text_col),
-                                                )
-                                                .truncate(),
-                                            );
-                                        }
                                     } else {
-                                        let fallback = if track.artist.is_empty() {
-                                            track.title.clone()
-                                        } else {
-                                            format!("{} — {}", track.artist, track.title)
-                                        };
                                         ui.add(
                                             egui::Label::new(
-                                                RichText::new(fallback)
+                                                RichText::new(lyric_text)
                                                     .font(FontId::proportional(11.5 * s))
                                                     .color(text_col),
                                             )
                                             .truncate(),
                                         );
                                     }
-                                });
-                                if let Some(tr) = pill_tr {
+                                } else {
+                                    let fallback = if track.artist.is_empty() {
+                                        track.title.clone()
+                                    } else {
+                                        format!("{} — {}", track.artist, track.title)
+                                    };
                                     ui.add(
                                         egui::Label::new(
-                                            RichText::new(tr)
-                                                .font(FontId::proportional(9.5 * s))
-                                                .color(Color32::from_rgba_unmultiplied(
-                                                    text_col.r(),
-                                                    text_col.g(),
-                                                    text_col.b(),
-                                                    185,
-                                                )),
+                                            RichText::new(fallback)
+                                                .font(FontId::proportional(11.5 * s))
+                                                .color(text_col),
                                         )
                                         .truncate(),
                                     );
@@ -1792,16 +1661,6 @@ impl IslandApp {
                     egui::Layout::right_to_left(egui::Align::Center),
                     |ui| {
                         ui.set_clip_rect(ui.max_rect());
-                        ui.spacing_mut().item_spacing.x = 5.0 * s;
-                        if render_icon_button(
-                            ui,
-                            Vec2::splat(24.0 * s),
-                            "⚙",
-                            12.0 * s,
-                            muted,
-                            Some((Color32::from_rgba_unmultiplied(255, 255, 255, 16), 10)),
-                            "Open Settings",
-                        ) {
                         ui.spacing_mut().item_spacing.x = 4.0 * s;
                         if icon_button(
                             ui,
@@ -1816,24 +1675,6 @@ impl IslandApp {
                         .clicked()
                         {
                             self.open_settings(SettingsTab::Appearance, ctx);
-                        }
-                        if ui
-                            .add(
-                                egui::Button::new(
-                                    RichText::new(mode_btn_label)
-                                        .font(FontId::proportional(10.5 * s))
-                                        .color(muted),
-                                )
-                                .min_size(Vec2::new(48.0 * s, 23.0 * s))
-                                .fill(Color32::from_rgba_unmultiplied(255, 255, 255, 16))
-                                .corner_radius(CornerRadius::same(10)),
-                            )
-                            .on_hover_cursor(CursorIcon::PointingHand)
-                            .on_hover_text("Switch Notch / Floating Island")
-                            .clicked()
-                        {
-                            self.toggle_dock_mode();
-                            ctx.request_repaint();
                         }
                         if ui
                             .add(
@@ -1920,10 +1761,26 @@ impl IslandApp {
                         );
                     }
                     if self.config.show_calendar {
-                        render_pill_tab(ui, &mut self.active_tab, IslandTab::Calendar, "Calendar", accent, s);
+                        render_pill_tab(
+                            ui,
+                            &mut self.active_tab,
+                            IslandTab::Calendar,
+                            Some(IconKind::Calendar),
+                            "Calendar",
+                            accent,
+                            s,
+                        );
                     }
                     if self.config.show_pomodoro {
-                        render_pill_tab(ui, &mut self.active_tab, IslandTab::Pomodoro, "⏱ Timer", accent, s);
+                        render_pill_tab(
+                            ui,
+                            &mut self.active_tab,
+                            IslandTab::Pomodoro,
+                            None,
+                            "⏱ Timer",
+                            accent,
+                            s,
+                        );
                     }
                 },
             );
@@ -1943,39 +1800,6 @@ impl IslandApp {
                         "Open Settings",
                     ) {
                         self.open_settings(SettingsTab::Appearance, ctx);
-                    }
-                    ui.spacing_mut().item_spacing.x = 4.0 * s;
-                    if icon_button(
-                        ui,
-                        IconKind::Settings,
-                        Vec2::new(26.0 * s, 23.0 * s),
-                        13.0 * s,
-                        muted,
-                        Color32::from_rgba_unmultiplied(255, 255, 255, 16),
-                        CornerRadius::same(10),
-                    )
-                    .on_hover_text("Open Settings")
-                    .clicked()
-                    {
-                        self.open_settings(SettingsTab::Appearance, ctx);
-                    }
-                    if ui
-                        .add(
-                            egui::Button::new(
-                                RichText::new(mode_btn_label)
-                                    .font(FontId::proportional(10.5 * s))
-                                    .color(muted),
-                            )
-                            .min_size(Vec2::new(48.0 * s, 23.0 * s))
-                            .fill(Color32::from_rgba_unmultiplied(255, 255, 255, 16))
-                            .corner_radius(CornerRadius::same(10)),
-                        )
-                        .on_hover_cursor(CursorIcon::PointingHand)
-                        .on_hover_text("Switch Notch / Floating Island")
-                        .clicked()
-                    {
-                        self.toggle_dock_mode();
-                        ctx.request_repaint();
                     }
                 },
             );
@@ -2036,7 +1860,7 @@ impl IslandApp {
         ui.add_space(4.0);
 
         if self.config.show_lyrics {
-            let clicked = if let Some(track) = &self.media {
+            if let Some(track) = &self.media {
                 let pos_ms = self.current_lyric_ms(now);
                 let lyric = active_karaoke(&self.lyrics, pos_ms)
                     .map(|k| match self.config.karaoke_lyric_mode {
@@ -2045,10 +1869,6 @@ impl IslandApp {
                         KaraokeLyricMode::Original => k.text,
                     })
                     .unwrap_or("No synced lyric");
-                render_overview_summary_row(
-                    ui,
-                    "♪",
-                    accent,
                 if render_overview_row(
                     ui,
                     IconKind::MusicNote,
@@ -2056,12 +1876,6 @@ impl IslandApp {
                     accent,
                     s,
                     true,
-                )
-            } else {
-                render_overview_summary_row(ui, "♪", muted, "No music playing", muted, s, false)
-            };
-            if clicked {
-                self.active_tab = IslandTab::Music;
                 ) {
                     self.active_tab = IslandTab::Music;
                 }
@@ -2360,36 +2174,6 @@ impl IslandApp {
                                 if let Some(m) = &mut self.media {
                                     m.shuffle = next_shuf;
                                 }
-                    ui.horizontal(|ui| {
-                        let btn_sz = Vec2::splat(25.0 * s);
-                        let play_sz = Vec2::splat(29.0 * s);
-                        let gap = 3.0 * s;
-                        let controls_w = btn_sz.x * 4.0 + play_sz.x + gap * 4.0;
-                        let side = ((ui.available_width() - controls_w) * 0.5).max(0.0);
-                        ui.add_space(side);
-                        ui.spacing_mut().item_spacing.x = gap;
-
-                        let shuf_col = if track.shuffle { accent } else { muted };
-                        let btn_rad = CornerRadius::same((8.0 * s).round() as u8);
-                        if icon_button(
-                            ui,
-                            IconKind::Shuffle,
-                            btn_sz,
-                            13.0 * s,
-                            shuf_col,
-                            Color32::TRANSPARENT,
-                            btn_rad,
-                        )
-                        .on_hover_text("Shuffle")
-                        .clicked()
-                        {
-                            let next_shuf = !track.shuffle;
-                            let _ = self
-                                .channels
-                                .media_cmd_tx
-                                .send(MediaCommand::SetShuffle(next_shuf));
-                            if let Some(m) = &mut self.media {
-                                m.shuffle = next_shuf;
                             }
 
                             if render_icon_button(
@@ -2454,83 +2238,6 @@ impl IslandApp {
                                 if let Some(m) = &mut self.media {
                                     m.repeat = next_rep;
                                 }
-                        if icon_button(
-                            ui,
-                            IconKind::Previous,
-                            btn_sz,
-                            14.0 * s,
-                            text_col,
-                            Color32::TRANSPARENT,
-                            btn_rad,
-                        )
-                        .on_hover_text("Previous")
-                        .clicked()
-                        {
-                            let _ = self.channels.media_cmd_tx.send(MediaCommand::Previous);
-                        }
-
-                        let play_kind = if track.is_playing {
-                            IconKind::Pause
-                        } else {
-                            IconKind::Play
-                        };
-                        if icon_button(
-                            ui,
-                            play_kind,
-                            play_sz,
-                            15.5 * s,
-                            Color32::WHITE,
-                            Color32::from_rgba_unmultiplied(255, 255, 255, 24),
-                            CornerRadius::same((14.5 * s).round() as u8),
-                        )
-                        .on_hover_text("Play / Pause")
-                        .clicked()
-                        {
-                            let _ = self
-                                .channels
-                                .media_cmd_tx
-                                .send(MediaCommand::TogglePlayPause);
-                        }
-
-                        if icon_button(
-                            ui,
-                            IconKind::Next,
-                            btn_sz,
-                            14.0 * s,
-                            text_col,
-                            Color32::TRANSPARENT,
-                            btn_rad,
-                        )
-                        .on_hover_text("Next")
-                        .clicked()
-                        {
-                            let _ = self.channels.media_cmd_tx.send(MediaCommand::Next);
-                        }
-
-                        let (rep_kind, rep_col) = match track.repeat {
-                            RepeatMode::Off => (IconKind::Repeat, muted),
-                            RepeatMode::All => (IconKind::Repeat, accent),
-                            RepeatMode::One => (IconKind::RepeatOne, accent),
-                        };
-                        if icon_button(
-                            ui,
-                            rep_kind,
-                            btn_sz,
-                            13.0 * s,
-                            rep_col,
-                            Color32::TRANSPARENT,
-                            btn_rad,
-                        )
-                        .on_hover_text("Repeat (Off / All / One)")
-                        .clicked()
-                        {
-                            let next_rep = track.repeat.next();
-                            let _ = self
-                                .channels
-                                .media_cmd_tx
-                                .send(MediaCommand::SetRepeat(next_rep));
-                            if let Some(m) = &mut self.media {
-                                m.repeat = next_rep;
                             }
                         },
                     );
@@ -2768,42 +2475,6 @@ impl IslandApp {
                     );
                 }
                 for item in &self.todos.items {
-                    let row_w = ui.available_width();
-                    let btn_w = 24.0 * s;
-                    ui.allocate_ui_with_layout(
-                        Vec2::new(row_w, 22.0 * s),
-                        egui::Layout::left_to_right(egui::Align::Center),
-                        |ui| {
-                            ui.allocate_ui_with_layout(
-                                Vec2::new((row_w - btn_w - 4.0 * s).max(80.0), 22.0 * s),
-                                egui::Layout::left_to_right(egui::Align::Center),
-                                |ui| {
-                                    ui.set_clip_rect(ui.max_rect());
-                                    let mut done = item.done;
-                                    let label = if item.done {
-                                        RichText::new(&item.text)
-                                            .font(FontId::proportional(11.5 * s))
-                                            .color(muted)
-                                            .strikethrough()
-                                    } else {
-                                        RichText::new(&item.text)
-                                            .font(FontId::proportional(11.5 * s))
-                                            .color(text_col)
-                                    };
-                                    if ui.checkbox(&mut done, label).changed() {
-                                        toggle_id = Some(item.id);
-                                    }
-                                },
-                            );
-                            if render_icon_button(
-                                ui,
-                                Vec2::new(btn_w, 20.0 * s),
-                                "×",
-                                12.0 * s,
-                                muted,
-                                None,
-                                "Remove",
-                            ) {
                     ui.horizontal(|ui| {
                         let mut done = item.done;
                         let label = if item.done {
@@ -2838,8 +2509,8 @@ impl IslandApp {
                             {
                                 remove_id = Some(item.id);
                             }
-                        },
-                    );
+                        });
+                    });
                 }
             });
 
@@ -3239,17 +2910,27 @@ fn paint_island_surface(painter: &egui::Painter, rect: Rect, style: SurfaceStyle
         se: clamped_bot,
     };
 
+    let top_y = if ear_w > 0.5 {
+        rect.top() - 1.0
+    } else {
+        rect.top()
+    };
+    let body_rect = Rect::from_min_max(
+        Pos2::new(rect.left() + ear_w, top_y),
+        Pos2::new(rect.right() - ear_w, rect.bottom()),
+    );
+
     if let Some(tex) = grad_tex {
-        let shape = RectShape::filled(rect, body_corners, Color32::WHITE)
+        let shape = RectShape::filled(body_rect, body_corners, Color32::WHITE)
             .with_texture(tex.id(), Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)));
         painter.add(shape);
     } else {
-        painter.rect_filled(rect, body_corners, fill);
+        painter.rect_filled(body_rect, body_corners, fill);
     }
 
     if border_alpha > 0 {
         painter.rect_stroke(
-            rect,
+            body_rect,
             body_corners,
             Stroke::new(
                 1.0,
@@ -3619,6 +3300,8 @@ fn render_overview_summary_row(
         },
     );
     clicked
+}
+
 fn render_overview_row(
     ui: &mut egui::Ui,
     icon: IconKind,
@@ -3685,16 +3368,6 @@ fn render_pill_tab(
     } else {
         Color32::from_gray(185)
     };
-    let btn = egui::Button::new(
-        RichText::new(label)
-            .font(FontId::proportional(11.0 * scale))
-            .color(text_col),
-    )
-    .min_size(Vec2::new(0.0, 24.0 * scale))
-    .fill(fill)
-    .stroke(stroke)
-    .corner_radius(CornerRadius::same(10));
-    if ui.add(btn).clicked() {
     let font = FontId::proportional(11.0 * scale);
     let galley = ui.painter().layout_no_wrap(label.to_owned(), font, text_col);
     let pad_x = 8.0 * scale;
@@ -3823,26 +3496,11 @@ fn render_playbar(
                     );
                 },
             );
-        let bar_w = (ui.available_width() - 38.0 * scale).max(40.0);
-        let (rect, resp) = ui.allocate_exact_size(
-            Vec2::new(bar_w, 16.0 * scale),
-            Sense::click_and_drag(),
-        );
-        let resp = resp.on_hover_cursor(CursorIcon::PointingHand);
-        let cy = rect.center().y;
-        let track_h = 3.5 * scale;
-        let track_rect = Rect::from_center_size(Pos2::new(rect.center().x, cy), Vec2::new(bar_w, track_h));
-        let painter = ui.painter();
-        painter.rect_filled(
-            track_rect,
-            CornerRadius::same(2),
-            Color32::from_rgba_unmultiplied(255, 255, 255, 42),
-        );
-
             let (rect, resp) = ui.allocate_exact_size(
                 Vec2::new(bar_w, 14.0 * scale),
                 Sense::click_and_drag(),
             );
+            let resp = resp.on_hover_cursor(CursorIcon::PointingHand);
             let cy = rect.center().y;
             let track_h = 3.5 * scale;
             let track_rect =

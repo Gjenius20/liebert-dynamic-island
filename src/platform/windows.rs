@@ -36,7 +36,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CallWindowProcW, FindWindowW, GA_ROOT, GWL_EXSTYLE, GWL_STYLE, GWLP_WNDPROC, GetAncestor,
     GetClassNameW, GetCursorPos, GetDesktopWindow, GetForegroundWindow, GetShellWindow,
     GetSystemMetrics, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, HWND_NOTOPMOST,
-    HWND_TOPMOST, IsIconic, IsWindowVisible, MONITORINFOF_PRIMARY, SM_CXSCREEN, SW_HIDE, SW_RESTORE,
+    HWND_TOPMOST, IsIconic, IsWindowVisible, IsZoomed, MONITORINFOF_PRIMARY, SM_CXSCREEN, SW_HIDE,
+    SW_RESTORE,
     SW_SHOWNOACTIVATE, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
     SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow, WM_NCCALCSIZE, WNDPROC,
     WS_BORDER, WS_CAPTION, WS_DLGFRAME, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
@@ -913,6 +914,10 @@ pub fn is_foreground_fullscreen() -> bool {
         return true;
     }
 
+    if unsafe { IsZoomed(hwnd) }.as_bool() {
+        return true;
+    }
+
     let mut win_rect = RECT::default();
     let dwm_ok = unsafe {
         DwmGetWindowAttribute(
@@ -927,33 +932,20 @@ pub fn is_foreground_fullscreen() -> bool {
         return false;
     }
 
-    let style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) } as u32;
-    let has_caption = (style & WS_CAPTION.0) == WS_CAPTION.0;
-    is_rect_covering_monitor_as_fullscreen(win_rect, info.rcMonitor, info.rcWork, has_caption)
+    is_rect_covering_monitor_as_fullscreen(win_rect, info.rcMonitor, info.rcWork)
 }
 
-fn is_rect_covering_monitor_as_fullscreen(
-    win_rect: RECT,
-    mon: RECT,
-    work: RECT,
-    has_caption: bool,
-) -> bool {
+fn is_rect_covering_monitor_as_fullscreen(win_rect: RECT, mon: RECT, work: RECT) -> bool {
     const TOL: i32 = 2;
     let covers_monitor = win_rect.left <= mon.left + TOL
         && win_rect.top <= mon.top + TOL
         && win_rect.right >= mon.right - TOL
         && win_rect.bottom >= mon.bottom - TOL;
-    if !covers_monitor {
-        return false;
-    }
-    // A 2px work-area inset means an auto-hidden taskbar, which a maximized window leaves
-    // uncovered (bottom == work.bottom), whereas windowed-fullscreen covers mon.bottom.
-    let has_visible_taskbar = (mon.bottom - work.bottom) >= 20
-        || (work.top - mon.top) >= 20
-        || (work.left - mon.left) >= 20
-        || (mon.right - work.right) >= 20;
-    let covers_autohide_edge = work.bottom < mon.bottom && win_rect.bottom >= mon.bottom;
-    has_visible_taskbar || !has_caption || covers_autohide_edge
+    let covers_work = win_rect.left <= work.left + TOL
+        && win_rect.top <= work.top + TOL
+        && win_rect.right >= work.right - TOL
+        && win_rect.bottom >= work.bottom - TOL;
+    covers_monitor || covers_work
 }
 
 pub fn list_installed_fonts() -> Vec<super::InstalledFont> {
@@ -988,47 +980,35 @@ mod tests {
         let work_taskbar = rect(0, 0, 1920, 1040);
         let work_autohide = rect(0, 0, 1920, 1078);
 
-        // Maximized with visible taskbar does not cover the monitor.
-        assert!(!is_rect_covering_monitor_as_fullscreen(
+        // Windowed-fullscreen / maximized covering work area with visible taskbar.
+        assert!(is_rect_covering_monitor_as_fullscreen(
             rect(-8, -8, 1928, 1048),
             mon,
-            work_taskbar,
-            true
+            work_taskbar
         ));
-        // Maximized with auto-hidden taskbar stops at work_autohide.bottom (1078 < 1080).
-        assert!(!is_rect_covering_monitor_as_fullscreen(
+        // Windowed-fullscreen / maximized with auto-hidden taskbar (1078 == work.bottom).
+        assert!(is_rect_covering_monitor_as_fullscreen(
             rect(0, 0, 1920, 1078),
             mon,
-            work_autohide,
-            true
+            work_autohide
         ));
-        // Windowed-fullscreen with auto-hidden taskbar covers full monitor height (1080).
+        // Exclusive / borderless fullscreen covering full monitor (1080).
         assert!(is_rect_covering_monitor_as_fullscreen(
             rect(0, 0, 1920, 1080),
             mon,
-            work_autohide,
-            true
+            work_autohide
         ));
-        // Borderless fullscreen with auto-hidden taskbar is fullscreen.
+        // Window covering the monitor while a taskbar exists.
         assert!(is_rect_covering_monitor_as_fullscreen(
             rect(0, 0, 1920, 1080),
             mon,
-            work_autohide,
-            false
+            work_taskbar
         ));
-        // Window covering the monitor while a taskbar exists is fullscreen.
-        assert!(is_rect_covering_monitor_as_fullscreen(
-            rect(0, 0, 1920, 1080),
-            mon,
-            work_taskbar,
-            true
-        ));
-        // Small windowed app.
+        // Small windowed app does not trigger fullscreen auto-hide.
         assert!(!is_rect_covering_monitor_as_fullscreen(
             rect(100, 100, 900, 700),
             mon,
-            work_taskbar,
-            true
+            work_taskbar
         ));
     }
 }
