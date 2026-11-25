@@ -128,6 +128,35 @@ pub enum PlatformEvent {
     CalendarUpdated(Result<Vec<CalendarEvent>, String>),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FontFamilyTarget {
+    Proportional,
+    Monospace,
+    Both,
+}
+
+#[derive(Debug, Clone)]
+pub struct FontFileSpec {
+    pub name: String,
+    pub path: String,
+    pub family: FontFamilyTarget,
+    pub face_indices: &'static [u32],
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct HoverPollInput<'a> {
+    pub window_title: &'a str,
+    pub ctx_hovered: bool,
+    pub pointer_busy: bool,
+    pub currently_hovered: bool,
+    pub visible: bool,
+    pub animating: bool,
+    pub top_offset_px: f32,
+    pub trigger_width_px: f32,
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub pixels_per_point: f32,
+}
+
 #[cfg(windows)]
 mod windows;
 
@@ -176,15 +205,34 @@ pub fn run_notification_spike() -> Result<String, String> {
     Err("Notification spike is only supported on Windows and Linux".to_owned())
 }
 
-pub fn primary_monitor_logical_width() -> f32 {
+pub fn overlay_resizable() -> bool {
+    #[cfg(target_os = "linux")]
+    return true;
+
+    #[cfg(not(target_os = "linux"))]
+    false
+}
+
+pub fn should_send_outer_position() -> bool {
+    #[cfg(target_os = "linux")]
+    return linux::should_send_outer_position();
+
+    #[cfg(not(target_os = "linux"))]
+    true
+}
+
+pub fn primary_monitor_logical_width(pixels_per_point: f32) -> f32 {
     #[cfg(windows)]
-    return windows::primary_monitor_logical_width();
+    return windows::primary_monitor_logical_width(pixels_per_point);
 
     #[cfg(target_os = "linux")]
-    return linux::primary_monitor_logical_width();
+    return linux::primary_monitor_logical_width(pixels_per_point);
 
     #[cfg(not(any(windows, target_os = "linux")))]
-    1920.0
+    {
+        let _ = pixels_per_point;
+        1920.0
+    }
 }
 
 pub fn prepare_overlay_rules(window_title: &str, top_offset_px: f32) {
@@ -195,7 +243,7 @@ pub fn prepare_overlay_rules(window_title: &str, top_offset_px: f32) {
     let _ = (window_title, top_offset_px);
 }
 
-pub fn apply_no_activate_hook(window_title: &str) {
+pub fn apply_overlay_window_setup(window_title: &str) {
     #[cfg(windows)]
     windows::apply_no_activate_hook(window_title);
 
@@ -206,54 +254,55 @@ pub fn apply_no_activate_hook(window_title: &str) {
     let _ = window_title;
 }
 
-pub fn pin_window_top_y(window_title: &str, target_y_px: i32) {
+pub fn sync_overlay_window(
+    window_title: &str,
+    x_logical: f32,
+    y_logical: f32,
+    w_logical: f32,
+    h_logical: f32,
+    notch_dock_mode: bool,
+) {
     #[cfg(windows)]
-    windows::pin_window_top_y(window_title, target_y_px);
+    windows::sync_overlay_window(window_title, x_logical, y_logical, w_logical, h_logical, notch_dock_mode);
 
-    #[cfg(not(windows))]
-    let _ = (window_title, target_y_px);
+    #[cfg(target_os = "linux")]
+    linux::sync_overlay_window(
+        window_title,
+        x_logical,
+        y_logical,
+        w_logical,
+        h_logical,
+        notch_dock_mode,
+    );
+
+    #[cfg(not(any(windows, target_os = "linux")))]
+    let _ = (window_title, x_logical, y_logical, w_logical, h_logical, notch_dock_mode);
+}
+
+pub fn detect_overlay_hover(input: HoverPollInput<'_>) -> bool {
+    #[cfg(windows)]
+    return windows::detect_overlay_hover(input);
+
+    #[cfg(target_os = "linux")]
+    return linux::detect_overlay_hover(input);
+
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        input.visible && (input.pointer_busy || input.ctx_hovered)
+    }
 }
 
 pub fn bring_window_to_front(window_title: &str) -> bool {
     #[cfg(windows)]
     return windows::bring_window_to_front(window_title);
 
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    return linux::bring_window_to_front(window_title);
+
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         let _ = window_title;
         true
-    }
-}
-
-pub fn is_cursor_over_window(window_title: &str, padding_px: i32) -> Option<bool> {
-    #[cfg(windows)]
-    return windows::is_cursor_over_window(window_title, padding_px);
-
-    #[cfg(target_os = "linux")]
-    return linux::is_cursor_over_window(window_title, padding_px);
-
-    #[cfg(not(any(windows, target_os = "linux")))]
-    {
-        let _ = (window_title, padding_px);
-        None
-    }
-}
-
-pub fn is_cursor_in_top_trigger(
-    top_offset_px: f32,
-    trigger_width_px: f32,
-    pixels_per_point: f32,
-) -> Option<bool> {
-    #[cfg(windows)]
-    return windows::is_cursor_in_top_trigger(top_offset_px, trigger_width_px, pixels_per_point);
-
-    #[cfg(target_os = "linux")]
-    return linux::is_cursor_in_top_trigger(top_offset_px, trigger_width_px, pixels_per_point);
-
-    #[cfg(not(any(windows, target_os = "linux")))]
-    {
-        let _ = (top_offset_px, trigger_width_px, pixels_per_point);
-        None
     }
 }
 
@@ -266,6 +315,28 @@ pub fn is_foreground_fullscreen() -> bool {
 
     #[cfg(not(any(windows, target_os = "linux")))]
     false
+}
+
+pub fn base_fallback_fonts() -> Vec<FontFileSpec> {
+    #[cfg(windows)]
+    return windows::base_fallback_fonts();
+
+    #[cfg(target_os = "linux")]
+    return linux::base_fallback_fonts();
+
+    #[cfg(not(any(windows, target_os = "linux")))]
+    Vec::new()
+}
+
+pub fn cjk_fallback_fonts() -> Vec<FontFileSpec> {
+    #[cfg(windows)]
+    return windows::cjk_fallback_fonts();
+
+    #[cfg(target_os = "linux")]
+    return linux::cjk_fallback_fonts();
+
+    #[cfg(not(any(windows, target_os = "linux")))]
+    Vec::new()
 }
 
 #[cfg(test)]

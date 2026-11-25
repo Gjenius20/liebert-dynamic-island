@@ -1,12 +1,13 @@
 use std::sync::mpsc;
 
-use eframe::egui::{self, Color32, CornerRadius, RichText, Stroke, ViewportBuilder, ViewportId};
+use eframe::egui::{self, Color32, CornerRadius, RichText, Stroke, Vec2, ViewportBuilder, ViewportId};
 
 use crate::calendar::{CalendarCommand, CalendarEvent, format_countdown, format_local_time, upcoming_events};
 use crate::clock::{COMMON_TIMEZONES, format_clock, is_valid_timezone};
 use crate::config::{Config, IdleDisplayMode, KaraokeLyricMode};
 use crate::lyrics::TRANSLATE_LANGUAGES;
 use crate::todo::TodoStore;
+use crate::ui::icons::{IconKind, icon_button};
 
 pub const SETTINGS_WINDOW_TITLE: &str = "Liebert Dynamic Island — Settings";
 
@@ -56,6 +57,7 @@ pub fn render_settings_viewport(ctx: &egui::Context, st: SettingsWindowState<'_>
                 ui.ctx()
                     .send_viewport_cmd(egui::ViewportCommand::Visible(true));
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);
+                *st.focus_requested = false;
             }
 
             apply_settings_theme(ui);
@@ -431,7 +433,18 @@ fn render_todo_tab(ui: &mut egui::Ui, todos: &mut TodoStore, new_todo_input: &mu
                 toggle_id = Some(item.id);
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.small_button("×").clicked() {
+                if icon_button(
+                    ui,
+                    IconKind::Close,
+                    Vec2::splat(22.0),
+                    11.0,
+                    Color32::from_gray(200),
+                    Color32::from_rgba_unmultiplied(255, 255, 255, 14),
+                    CornerRadius::same(6),
+                )
+                .on_hover_text("Remove task")
+                .clicked()
+                {
                     remove_id = Some(item.id);
                 }
             });
