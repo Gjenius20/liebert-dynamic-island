@@ -48,7 +48,8 @@ Missing or invalid fields safely fall back to `Default`. Key options:
 | `top_offset_px` | `f32` | `10.0` | Top margin in Floating Island mode (`0`–`60`) |
 | `auto_hide_when_idle` | `bool` | `false` | Automatically hide the overlay after `auto_hide_delay_secs` |
 | `auto_hide_delay_secs` | `u64` | `5` | Idle delay before auto-hiding (`0`–`60` seconds) |
-| `hide_in_fullscreen` | `bool` | `true` | Hide idle pill when a fullscreen or windowed-fullscreen app is active |
+| `hide_in_fullscreen` | `bool` | `true` | Hide idle pill when a fullscreen app or game is active |
+| `hide_in_windowed_fullscreen` | `bool` | `true` | Also hide on windowed fullscreen / maximized apps |
 | `idle_display` | `enum` | `Auto` | `Auto`, `Clock`, `Lyrics`, `NextEvent`, `Pomodoro`, or `Minimal` |
 | `clock_timezone` | `string` | `"Local"` | `"Local"` or any IANA timezone (e.g. `"Asia/Jakarta"`) |
 | `font_name` | `string` | `""` | Installed device font name (empty uses system default) |
@@ -90,7 +91,8 @@ liebert-dynamic-island/
     ├── tray.rs                  # System tray icon & menu actions
     ├── ui/
     │   ├── mod.rs               # Overlay pill renderer, tabs, & permanent canvas
-    │   └── settings.rs          # Secondary Settings viewport
+    │   ├── icons.rs             # Shared geometric vector icons
+    │   └── settings.rs          # Secondary Settings viewport & standalone Linux settings
     └── platform/
         ├── mod.rs               # Cross-platform facade & font directory scanner
         ├── windows.rs           # Win32 overlay hooks, WinRT notifications & SMTC
@@ -102,5 +104,14 @@ liebert-dynamic-island/
 ```sh
 cargo test                                 # Run all unit tests
 cargo clippy --all-targets -- -D warnings  # Run Clippy with warnings treated as errors
-cargo build --release                      # Build stripped LTO release binary
+cargo build --release                      # Build stripped LTO release binary (codegen-units = 1)
+```
+
+### Windows Installer Packaging
+
+The repository includes `[package.metadata.packager]` in `Cargo.toml` for building `.exe` (NSIS) and `.msi` (WiX) installers with built-in uninstall support:
+
+```sh
+cargo install cargo-packager --locked
+cargo packager --release                   # Outputs installers to target/installer/
 ```

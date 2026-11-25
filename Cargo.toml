@@ -51,6 +51,7 @@ calloop-wayland-source = "0.3"
 lto = "thin"
 strip = true
 opt-level = "s"
+codegen-units = 1
 
 [package.metadata.packager]
 product-name = "Liebert Dynamic Island"

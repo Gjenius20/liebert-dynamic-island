@@ -40,11 +40,11 @@ pub struct MediaTrack {
     pub duration_ms: u64,
     pub shuffle: bool,
     pub repeat: RepeatMode,
-    pub album_art: Option<AlbumArt>,
+    pub album_art: Option<Arc<AlbumArt>>,
     pub updated_at: Instant,
 }
 
-pub fn decode_album_art(bytes: &[u8]) -> Option<AlbumArt> {
+pub fn decode_album_art(bytes: &[u8]) -> Option<Arc<AlbumArt>> {
     let img = image::load_from_memory(bytes).ok()?;
     let resized = img.resize(160, 160, image::imageops::FilterType::Triangle);
     let rgba_img = resized.to_rgba8();
@@ -52,12 +52,12 @@ pub fn decode_album_art(bytes: &[u8]) -> Option<AlbumArt> {
     let height = rgba_img.height() as usize;
     let rgba = rgba_img.into_raw();
     let dominant_rgb = extract_dominant_accent(&rgba);
-    Some(AlbumArt {
+    Some(Arc::new(AlbumArt {
         width,
         height,
         rgba,
         dominant_rgb,
-    })
+    }))
 }
 
 pub fn extract_dominant_accent(rgba: &[u8]) -> Option<[u8; 3]> {

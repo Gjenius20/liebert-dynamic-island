@@ -333,7 +333,7 @@ pub fn spawn_media_listener(
             }
 
             let mut last_snapshot: Option<MediaSnapshot> = None;
-            let mut cached_art: Option<((String, String), Option<AlbumArt>)> = None;
+            let mut cached_art: CachedAlbumArt = None;
             loop {
                 let current = read_smtc_track(&manager, &mut cached_art);
                 let snapshot = current.as_ref().map(|(t, raw_pos_ms, last_updated_ticks)| {
@@ -407,9 +407,11 @@ fn current_filetime_ticks() -> i64 {
         .unwrap_or(0)
 }
 
+type CachedAlbumArt = Option<((String, String), Option<Arc<AlbumArt>>)>;
+
 fn read_smtc_track(
     manager: &GlobalSystemMediaTransportControlsSessionManager,
-    cached_art: &mut Option<((String, String), Option<AlbumArt>)>,
+    cached_art: &mut CachedAlbumArt,
 ) -> Option<(MediaTrack, u64, i64)> {
     let session = manager.GetCurrentSession().ok()?;
     let props = session.TryGetMediaPropertiesAsync().ok()?.join().ok()?;
@@ -503,7 +505,7 @@ fn read_smtc_track(
 
 fn read_smtc_thumbnail(
     props: &windows::Media::Control::GlobalSystemMediaTransportControlsSessionMediaProperties,
-) -> Option<AlbumArt> {
+) -> Option<Arc<AlbumArt>> {
     let thumb_ref = props.Thumbnail().ok()?;
     let stream = thumb_ref.OpenReadAsync().ok()?.join().ok()?;
     let size = stream.Size().ok()? as usize;

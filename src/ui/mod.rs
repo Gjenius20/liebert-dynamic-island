@@ -653,12 +653,17 @@ impl IslandApp {
         self.gradient_key = Some(key);
     }
 
-    fn sync_album_art_texture(&mut self, ctx: &egui::Context, track: &MediaTrack) {
-        let key = (track.artist.clone(), track.title.clone());
-        if self.album_art_key.as_ref() == Some(&key) {
+    fn sync_album_art_texture(&mut self, ctx: &egui::Context) {
+        let Some(track) = &self.media else {
+            return;
+        };
+        if let Some(prev) = &self.album_art_key
+            && prev.0 == track.artist
+            && prev.1 == track.title
+        {
             return;
         }
-        self.album_art_key = Some(key);
+        self.album_art_key = Some((track.artist.clone(), track.title.clone()));
         if let Some(art) = &track.album_art {
             let img = ColorImage::from_rgba_unmultiplied([art.width, art.height], &art.rgba);
             if let Some(tex) = &mut self.album_art_tex {
@@ -1255,8 +1260,8 @@ impl IslandApp {
 
         match self.effective_idle_mode() {
             IdleDisplayMode::Lyrics if self.config.show_lyrics && self.media.is_some() => {
-                if let Some(track) = self.media.clone() {
-                    self.sync_album_art_texture(ctx, &track);
+                self.sync_album_art_texture(ctx);
+                if let Some(track) = &self.media {
                     let pos_ms = self.current_lyric_ms(now);
                     let active = active_karaoke(&self.lyrics, pos_ms);
 
@@ -1637,11 +1642,13 @@ impl IslandApp {
         let muted = self.muted_color32();
         let s = self.config.scale;
 
-        if let Some(item) = self.state.active.clone() {
+        if let Some(item) = &self.state.active {
             let brand = app_brand_color(&item.app_name, accent);
             let row_h = 26.0 * s;
             let right_w = 96.0 * s;
             let left_w = (ui.available_width() - right_w - 6.0 * s).max(80.0);
+            let mut open_settings_clicked = false;
+            let mut dismiss_clicked = false;
             ui.horizontal(|ui| {
                 ui.allocate_ui_with_layout(
                     Vec2::new(left_w, row_h),
@@ -1688,7 +1695,7 @@ impl IslandApp {
                         .on_hover_text("Open Settings")
                         .clicked()
                         {
-                            self.open_settings(SettingsTab::Appearance, ctx);
+                            open_settings_clicked = true;
                         }
                         if ui
                             .add(
@@ -1704,8 +1711,7 @@ impl IslandApp {
                             .on_hover_cursor(CursorIcon::PointingHand)
                             .clicked()
                         {
-                            self.state.dismiss_active(now);
-                            ctx.request_repaint();
+                            dismiss_clicked = true;
                         }
                     },
                 );
@@ -1727,6 +1733,13 @@ impl IslandApp {
                     )
                     .wrap(),
                 );
+            }
+            if open_settings_clicked {
+                self.open_settings(SettingsTab::Appearance, ctx);
+            }
+            if dismiss_clicked {
+                self.state.dismiss_active(now);
+                ctx.request_repaint();
             }
             return;
         }
@@ -2080,7 +2093,10 @@ impl IslandApp {
         let muted = self.muted_color32();
         let s = self.config.scale;
 
-        let Some(track) = self.media.clone() else {
+        self.sync_album_art_texture(ctx);
+        let pos_ms = self.current_playback_ms(now);
+        let lyric_ms = self.current_lyric_ms(now);
+        let Some(track) = self.media.as_ref() else {
             ui.label(
                 RichText::new("Play a song on Spotify or any media app...")
                     .font(FontId::proportional(11.5 * s))
@@ -2089,9 +2105,9 @@ impl IslandApp {
             return;
         };
 
-        self.sync_album_art_texture(ctx, &track);
-        let pos_ms = self.current_playback_ms(now);
-        let lyric_ms = self.current_lyric_ms(now);
+        let mut pending_seek: Option<u64> = None;
+        let mut pending_shuffle: Option<bool> = None;
+        let mut pending_repeat: Option<RepeatMode> = None;
         let total_w = ui.available_width();
         let col_gap = 14.0 * s;
         let left_w = (total_w * 0.43).max(148.0 * s);
@@ -2157,10 +2173,7 @@ impl IslandApp {
                         render_playbar(ui, pos_ms, track.duration_ms, accent, muted, s)
                     {
                         let _ = self.channels.media_cmd_tx.send(MediaCommand::SeekMs(seek_ms));
-                        if let Some(m) = &mut self.media {
-                            m.position_ms = seek_ms;
-                            m.updated_at = now;
-                        }
+                        pending_seek = Some(seek_ms);
                     }
 
                     ui.add_space(4.0 * s);
@@ -2185,9 +2198,7 @@ impl IslandApp {
                                     .channels
                                     .media_cmd_tx
                                     .send(MediaCommand::SetShuffle(next_shuf));
-                                if let Some(m) = &mut self.media {
-                                    m.shuffle = next_shuf;
-                                }
+                                pending_shuffle = Some(next_shuf);
                             }
 
                             if render_icon_button(
@@ -2249,9 +2260,7 @@ impl IslandApp {
                                     .channels
                                     .media_cmd_tx
                                     .send(MediaCommand::SetRepeat(next_rep));
-                                if let Some(m) = &mut self.media {
-                                    m.repeat = next_rep;
-                                }
+                                pending_repeat = Some(next_rep);
                             }
                         },
                     );
@@ -2441,6 +2450,18 @@ impl IslandApp {
                 },
             );
         });
+        if let Some(m) = &mut self.media {
+            if let Some(seek_ms) = pending_seek {
+                m.position_ms = seek_ms;
+                m.updated_at = now;
+            }
+            if let Some(next_shuf) = pending_shuffle {
+                m.shuffle = next_shuf;
+            }
+            if let Some(next_rep) = pending_repeat {
+                m.repeat = next_rep;
+            }
+        }
     }
 
     fn render_todo_tab(&mut self, ui: &mut egui::Ui) {
@@ -3126,18 +3147,17 @@ fn truncate_with_ellipsis(text: &str, fits: impl Fn(&str) -> bool) -> String {
 
 fn render_centered_truncated_text(ui: &mut egui::Ui, text: &str, font: FontId, color: Color32) {
     let max_w = ui.available_width();
-    let painter = ui.painter().clone();
     let shown = truncate_with_ellipsis(text, |t| {
-        painter
+        ui.painter()
             .layout_no_wrap(t.to_owned(), font.clone(), color)
             .size()
             .x
             <= max_w
     });
-    let galley = painter.layout_no_wrap(shown, font, color);
+    let galley = ui.painter().layout_no_wrap(shown, font, color);
     let (rect, _) = ui.allocate_exact_size(Vec2::new(max_w, galley.size().y), Sense::hover());
     let pos = Pos2::new(rect.center().x - galley.size().x * 0.5, rect.top());
-    painter
+    ui.painter()
         .with_clip_rect(rect)
         .galley(pos, galley, Color32::TRANSPARENT);
 }
