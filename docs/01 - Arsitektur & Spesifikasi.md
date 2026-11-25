@@ -36,7 +36,7 @@ liebert-dynamic-island/
     ├── calendar.rs              # RFC 5545 .ics parser & Google Calendar sync worker
     ├── tray.rs                  # System tray menu & lifecycle control
     ├── ui/
-    │   ├── mod.rs               # Overlay pill (Idle/Compact/Expanded tabs), unified AA notch mesh, & UI loop
+    │   ├── mod.rs               # Overlay pill (Idle/Compact/Expanded tabs), spring physics, unified AA notch mesh, & UI loop
     │   ├── icons.rs             # Crisp Painter-drawn vector icons & responsive icon buttons
     │   └── settings.rs          # Secondary viewport Settings (Appearance, Todo, Calendar)
     └── platform/

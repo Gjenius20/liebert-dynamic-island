@@ -9,6 +9,9 @@ tags:
 # 04 - Changelog & Dev Log
 
 ## 2026-11-26
+### Changed
+- `src/ui/mod.rs`, `src/platform/wayland_layer.rs`: Mengganti interpolasi ukuran linier-eksponensial dengan fisika pegas harmonik teredam ala Dynamic Island macOS (`step_spring`, 4 sub-langkah per frame, kekakuan/redaman X & Y sedikit bertahap untuk efek elastis saat expand/collapse/reveal serta `notch_morph`, clip rect konten saat pantulan, dan interval repaint `6 ms` pada `wlr-layer-shell`). Lihat [[01 - Arsitektur & Spesifikasi]] dan [[03 - Catatan Rapat & Keputusan]].
+
 ### Added
 - `src/platform/wayland_layer.rs`, `Cargo.toml`, `src/main.rs`, `src/ui/settings.rs`: Mengimplementasikan backend native Wayland **`wlr-layer-shell`** (`smithay-client-toolkit 0.19` + `glutin` EGL + `egui_glow 0.37` + `calloop 0.13`) menggunakan `Layer::Overlay`, `Anchor::TOP`, `exclusive_zone(-1)`, `KeyboardInteractivity::None`, dan `hl.layer_rule` Hyprland (`order=-1`, `above_lock=false`, `no_anim=true`, `blur=false`) sehingga Dynamic Island selalu terkunci di tepi atas tengah di seluruh workspace dan tepat di atas Quickshell; lengkap dengan mode `--settings --ipc-sock` untuk sinkronisasi live Settings & `Test Popup`. Lihat [[01 - Arsitektur & Spesifikasi]] dan [[03 - Catatan Rapat & Keputusan]].
 - `src/config.rs`, `src/ui/settings.rs`, `src/ui/mod.rs`: Menambahkan opsi **`show_pill_translation`** (default `true`, dengan toggle checkbox di Settings → *Music & Synced Lyrics*) untuk menampilkan baris terjemahan lirik tepat di bawah lirik asli/romaji saat berada di mode pill/idle (`IdleDisplayMode::Lyrics`). Lihat [[01 - Arsitektur & Spesifikasi]].

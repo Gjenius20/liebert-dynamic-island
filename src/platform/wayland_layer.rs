@@ -717,7 +717,7 @@ pub fn try_run_layer_shell(
         wl_state.needs_redraw = false;
 
         let wait = if step.repaint_after.is_zero() {
-            Duration::from_millis(8)
+            Duration::from_millis(6)
         } else {
             step.repaint_after.min(Duration::from_millis(80))
         };

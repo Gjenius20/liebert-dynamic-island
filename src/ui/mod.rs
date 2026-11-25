@@ -138,8 +138,10 @@ pub struct IslandApp {
     new_todo_input: String,
     calendar_url_input: String,
     current_size: Vec2,
+    size_velocity: Vec2,
     applied_size: Vec2,
     notch_morph: f32,
+    notch_morph_vel: f32,
     applied_top_y: f32,
     test_notif_seq: u32,
     last_frame: Instant,
@@ -202,8 +204,10 @@ impl IslandApp {
             new_todo_input: String::new(),
             calendar_url_input,
             current_size: initial_size,
+            size_velocity: Vec2::ZERO,
             applied_size: Vec2::ZERO,
             notch_morph,
+            notch_morph_vel: 0.0,
             applied_top_y: -1.0,
             test_notif_seq: 0,
             last_frame: now,
@@ -721,17 +725,25 @@ impl IslandApp {
         let (want_exit, tray_open_settings) = self.handle_events(ctx, now);
 
         let target_morph = if self.config.notch_dock_mode { 1.0 } else { 0.0 };
-        let morph_diff = target_morph - self.notch_morph;
-        let morphing = morph_diff.abs() >= 0.004;
-        if morphing {
-            let m_t = 1.0 - (-12.0 * dt).exp();
-            self.notch_morph += morph_diff * m_t;
-            if (target_morph - self.notch_morph).abs() < 0.004 {
-                self.notch_morph = target_morph;
-            }
-        } else {
+        let (next_morph, next_morph_vel) = step_spring(
+            self.notch_morph,
+            self.notch_morph_vel,
+            target_morph,
+            14.5,
+            0.76,
+            dt,
+        );
+        self.notch_morph = next_morph.clamp(0.0, 1.0);
+        self.notch_morph_vel = if (target_morph - self.notch_morph).abs() < 0.002
+            && next_morph_vel.abs() < 0.02
+        {
             self.notch_morph = target_morph;
-        }
+            0.0
+        } else {
+            next_morph_vel
+        };
+        let morphing = (target_morph - self.notch_morph).abs() >= 0.002
+            || self.notch_morph_vel.abs() >= 0.02;
 
         let mut fs_changed = false;
         if now.duration_since(self.last_fullscreen_check) >= Duration::from_millis(250) {
@@ -793,11 +805,45 @@ impl IslandApp {
         }
 
         let target = self.target_size();
-        let t = 1.0 - (-14.0 * dt).exp();
-        self.current_size += (target - self.current_size) * t;
-        let animating = (target - self.current_size).length_sq() > 0.25;
+        if became_visible {
+            let s = self.config.scale;
+            self.current_size = Vec2::new(
+                (target.x * 0.78).max(48.0 * s),
+                (target.y * 0.62).max(18.0 * s),
+            );
+            self.size_velocity = Vec2::new(180.0 * s, 90.0 * s);
+        }
+        let expanding_x = target.x > self.current_size.x + 1.0;
+        let expanding_y = target.y > self.current_size.y + 1.0;
+        let (omega_x, zeta_x) = if expanding_x { (16.5, 0.68) } else { (15.5, 0.76) };
+        let (omega_y, zeta_y) = if expanding_y { (14.8, 0.70) } else { (14.0, 0.78) };
+
+        let (nx, vx) = step_spring(
+            self.current_size.x,
+            self.size_velocity.x,
+            target.x,
+            omega_x,
+            zeta_x,
+            dt,
+        );
+        let (ny, vy) = step_spring(
+            self.current_size.y,
+            self.size_velocity.y,
+            target.y,
+            omega_y,
+            zeta_y,
+            dt,
+        );
+        let min_w = (60.0 * self.config.scale).min(target.x);
+        let min_h = (22.0 * self.config.scale).min(target.y);
+        self.current_size = Vec2::new(nx.max(min_w), ny.max(min_h));
+        self.size_velocity = Vec2::new(vx, vy);
+
+        let animating = (target - self.current_size).length_sq() > 0.09
+            || self.size_velocity.length_sq() > 1.0;
         if !animating {
             self.current_size = target;
+            self.size_velocity = Vec2::ZERO;
         }
 
         let rounded_size = Vec2::new(self.current_size.x.round(), self.current_size.y.round());
@@ -1012,13 +1058,18 @@ impl IslandApp {
         };
 
         egui::CentralPanel::default().frame(frame).show(ui, |ui| {
+            ui.set_clip_rect(ui.max_rect());
             match self.state.visual {
                 IslandVisualState::Expanded => {
                     if self.current_size.y >= 95.0 * self.config.scale {
                         self.render_expanded(ui, &ctx, now);
                     }
                 }
-                IslandVisualState::Compact => self.render_compact(ui),
+                IslandVisualState::Compact => {
+                    if self.current_size.y >= 40.0 * self.config.scale {
+                        self.render_compact(ui);
+                    }
+                }
                 IslandVisualState::Idle => self.render_idle(ui, &ctx, now),
             }
         });
@@ -2345,6 +2396,22 @@ fn lerp_u8(a: u8, b: u8, t: f32) -> u8 {
     ((a as f32) + ((b as f32) - (a as f32)) * t).round() as u8
 }
 
+/// Underdamped harmonic spring step (macOS/iOS Dynamic Island style bounce) with sub-stepping.
+fn step_spring(pos: f32, vel: f32, target: f32, omega: f32, zeta: f32, dt: f32) -> (f32, f32) {
+    const SUBSTEPS: usize = 4;
+    let sub_dt = (dt / SUBSTEPS as f32).clamp(0.0, 0.02);
+    let stiffness = omega * omega;
+    let damping = 2.0 * zeta * omega;
+    let mut p = pos;
+    let mut v = vel;
+    for _ in 0..SUBSTEPS {
+        let accel = stiffness * (target - p) - damping * v;
+        v += accel * sub_dt;
+        p += v * sub_dt;
+    }
+    (p, v)
+}
+
 fn build_vertical_gradient_pixels(
     base_bg: [u8; 4],
     bottom_rgb: [u8; 3],
@@ -2982,5 +3049,20 @@ mod tests {
         let bottom = pixels[63].to_srgba_unmultiplied();
         assert_eq!(bottom[3], 252);
         assert!(bottom[0] >= 165 && bottom[1] >= 65 && bottom[2] >= 95);
+    }
+
+    #[test]
+    fn macos_spring_overshoots_and_settles_smoothly() {
+        let mut pos = 164.0;
+        let mut vel = 0.0;
+        let target = 454.0;
+        let mut max_pos = pos;
+        for _ in 0..90 {
+            (pos, vel) = step_spring(pos, vel, target, 16.5, 0.68, 1.0 / 60.0);
+            max_pos = max_pos.max(pos);
+        }
+        assert!(max_pos > target + 4.0, "expected bounce overshoot, got {max_pos}");
+        assert!((pos - target).abs() < 0.5, "expected settle near target, got {pos}");
+        assert!(vel.abs() < 2.0);
     }
 }
