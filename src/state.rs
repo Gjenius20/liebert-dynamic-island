@@ -33,7 +33,11 @@ pub struct IslandState {
     pub visual: IslandVisualState,
     pub paused: bool,
     pub auto_hide: bool,
+    pub hide_in_fullscreen: bool,
+    pub fullscreen_active: bool,
     pub hovered: bool,
+    idle_since: Instant,
+    auto_hide_delay: Duration,
     collapse_deadline: Option<Instant>,
     collapse_timeout: Duration,
     pub listener_status: ListenerStatus,
@@ -47,7 +51,11 @@ impl IslandState {
             visual: IslandVisualState::Idle,
             paused: false,
             auto_hide,
+            hide_in_fullscreen: false,
+            fullscreen_active: false,
             hovered: false,
+            idle_since: Instant::now(),
+            auto_hide_delay: Duration::ZERO,
             collapse_deadline: None,
             collapse_timeout,
             listener_status: ListenerStatus::Starting,
@@ -87,6 +95,7 @@ impl IslandState {
             self.visual = if self.hovered {
                 IslandVisualState::Expanded
             } else {
+                self.idle_since = now;
                 IslandVisualState::Idle
             };
             self.collapse_deadline = None;
@@ -115,6 +124,7 @@ impl IslandState {
             self.collapse_deadline = Some(now + self.collapse_timeout);
         } else {
             self.visual = IslandVisualState::Idle;
+            self.idle_since = now;
             self.collapse_deadline = None;
         }
         true
@@ -122,6 +132,50 @@ impl IslandState {
 
     pub fn set_collapse_timeout(&mut self, timeout: Duration) {
         self.collapse_timeout = timeout;
+    }
+
+    pub fn set_auto_hide(&mut self, enabled: bool, now: Instant) {
+        if self.auto_hide != enabled {
+            self.auto_hide = enabled;
+            self.idle_since = now;
+        }
+    }
+
+    pub fn set_auto_hide_delay(&mut self, delay: Duration) {
+        self.auto_hide_delay = delay;
+    }
+
+    pub fn set_hide_in_fullscreen(&mut self, enabled: bool) {
+        self.hide_in_fullscreen = enabled;
+    }
+
+    pub fn set_fullscreen_active(&mut self, active: bool) -> bool {
+        if self.fullscreen_active == active {
+            return false;
+        }
+        self.fullscreen_active = active;
+        if active && self.hide_in_fullscreen {
+            self.hovered = false;
+            if self.active.is_some() {
+                self.visual = IslandVisualState::Compact;
+            } else {
+                self.visual = IslandVisualState::Idle;
+                self.idle_since = Instant::now();
+            }
+        }
+        true
+    }
+
+    pub fn auto_hide_deadline(&self) -> Option<Instant> {
+        if self.auto_hide
+            && self.active.is_none()
+            && !self.hovered
+            && !matches!(self.listener_status, ListenerStatus::AccessDenied(_))
+        {
+            Some(self.idle_since + self.auto_hide_delay)
+        } else {
+            None
+        }
     }
 
     pub fn tick(&mut self, now: Instant) -> bool {
@@ -141,6 +195,7 @@ impl IslandState {
             self.active = None;
             self.queue.clear();
             self.visual = IslandVisualState::Idle;
+            self.idle_since = Instant::now();
             self.collapse_deadline = None;
             if !matches!(
                 self.listener_status,
@@ -157,10 +212,18 @@ impl IslandState {
         self.queue.len()
     }
 
-    pub fn should_be_visible(&self) -> bool {
-        !self.auto_hide
+    pub fn should_be_visible(&self, now: Instant) -> bool {
+        if self.hide_in_fullscreen && self.fullscreen_active {
+            return false;
+        }
+        if !self.auto_hide
             || self.active.is_some()
+            || self.hovered
             || matches!(self.listener_status, ListenerStatus::AccessDenied(_))
+        {
+            return true;
+        }
+        now.saturating_duration_since(self.idle_since) < self.auto_hide_delay
     }
 
     pub fn next_deadline(&self) -> Option<Instant> {
@@ -254,20 +317,61 @@ mod tests {
     fn paused_ignores_incoming_and_auto_hide_visibility_works() {
         let t0 = Instant::now();
         let mut state = IslandState::new(true, Duration::from_secs(5));
-        assert!(!state.should_be_visible());
+        assert!(!state.should_be_visible(t0));
 
         state.push_notification(sample("1", "Visible"), t0);
-        assert!(state.should_be_visible());
+        assert!(state.should_be_visible(t0));
 
         state.set_paused(true);
         assert_eq!(state.active, None);
-        assert!(!state.should_be_visible());
+        assert!(!state.should_be_visible(t0));
 
         state.push_notification(sample("2", "Ignored"), t0);
         assert_eq!(state.active, None);
 
         state.listener_status = ListenerStatus::AccessDenied("denied".to_owned());
-        assert!(state.should_be_visible());
+        assert!(state.should_be_visible(t0));
+    }
+
+    #[test]
+    fn auto_hide_waits_for_delay_and_hover_reveals_again() {
+        let t0 = Instant::now();
+        let mut state = IslandState::new(false, Duration::from_secs(5));
+        state.set_auto_hide_delay(Duration::from_secs(4));
+        state.set_auto_hide(true, t0);
+
+        assert!(state.should_be_visible(t0 + Duration::from_secs(3)));
+        assert!(!state.should_be_visible(t0 + Duration::from_secs(4)));
+
+        let t_hover = t0 + Duration::from_secs(5);
+        assert!(state.set_hovered(true, t_hover));
+        assert!(state.should_be_visible(t_hover));
+
+        let t_leave = t0 + Duration::from_secs(7);
+        assert!(state.set_hovered(false, t_leave));
+        assert!(state.should_be_visible(t_leave + Duration::from_secs(2)));
+        assert!(!state.should_be_visible(t_leave + Duration::from_secs(4)));
+    }
+
+    #[test]
+    fn fullscreen_hides_island_when_enabled_and_restores_on_exit() {
+        let t0 = Instant::now();
+        let mut state = IslandState::new(false, Duration::from_secs(5));
+        state.set_hide_in_fullscreen(true);
+        state.push_notification(sample("1", "Ping"), t0);
+        state.set_hovered(true, t0);
+        assert!(state.should_be_visible(t0));
+
+        assert!(state.set_fullscreen_active(true));
+        assert!(!state.should_be_visible(t0));
+        assert!(!state.hovered);
+
+        assert!(state.set_fullscreen_active(false));
+        assert!(state.should_be_visible(t0));
+
+        state.set_hide_in_fullscreen(false);
+        assert!(state.set_fullscreen_active(true));
+        assert!(state.should_be_visible(t0));
     }
 
     #[test]

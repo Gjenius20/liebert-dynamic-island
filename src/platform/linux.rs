@@ -12,6 +12,11 @@ use crate::state::{ListenerStatus, NotificationItem};
 
 // shortcut: Wayland wlr-layer-shell positioning unsupported in winit/eframe, upgrade to smithay-client-toolkit or iced_layershell when targeting native Wayland positioning.
 
+pub fn is_foreground_fullscreen() -> bool {
+    // shortcut: Linux fullscreen detection unimplemented (needs X11 _NET_WM_STATE_FULLSCREEN or compositor IPC), upgrade when targeting Linux runtime.
+    false
+}
+
 struct NotificationServer {
     next_id: AtomicU32,
     tx: mpsc::Sender<PlatformEvent>,

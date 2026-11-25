@@ -15,10 +15,15 @@ use windows::UI::Notifications::{
     UserNotificationChangedEventArgs,
 };
 use windows::Win32::Foundation::{POINT, RECT};
+use windows::Win32::Graphics::Gdi::{
+    GetMonitorInfoW, MONITOR_DEFAULTTOPRIMARY, MONITORINFO, MonitorFromWindow,
+};
 use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
 use windows::Win32::UI::WindowsAndMessaging::{
-    FindWindowW, GWL_EXSTYLE, GetCursorPos, GetSystemMetrics, GetWindowLongPtrW, GetWindowRect,
-    SM_CXSCREEN, SetWindowLongPtrW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    FindWindowW, GWL_EXSTYLE, GetClassNameW, GetCursorPos, GetDesktopWindow, GetForegroundWindow,
+    GetShellWindow, GetSystemMetrics, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId,
+    IsIconic, IsWindowVisible, MONITORINFOF_PRIMARY, SM_CXSCREEN, SetWindowLongPtrW,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
 };
 use windows::core::HSTRING;
 
@@ -393,4 +398,76 @@ pub fn is_cursor_over_window(window_title: &str, padding_px: i32) -> Option<bool
             && pt.y >= rect.top - padding_px
             && pt.y <= rect.bottom + padding_px,
     )
+}
+
+pub fn is_cursor_in_top_trigger(
+    top_offset_px: f32,
+    trigger_width_px: f32,
+    pixels_per_point: f32,
+) -> Option<bool> {
+    let screen_w = unsafe { GetSystemMetrics(SM_CXSCREEN) };
+    if screen_w <= 0 {
+        return None;
+    }
+    let mut pt = POINT::default();
+    unsafe { GetCursorPos(&mut pt) }.ok()?;
+
+    let ppp = pixels_per_point.max(1.0);
+    let center_x = screen_w / 2;
+    let half_w = ((trigger_width_px * ppp) * 0.5) as i32;
+    let max_y = ((top_offset_px + 28.0) * ppp).max(16.0) as i32;
+
+    Some(pt.x >= center_x - half_w && pt.x <= center_x + half_w && pt.y >= 0 && pt.y <= max_y)
+}
+
+pub fn is_foreground_fullscreen() -> bool {
+    let hwnd = unsafe { GetForegroundWindow() };
+    if hwnd.is_invalid() {
+        return false;
+    }
+    if hwnd == unsafe { GetDesktopWindow() } || hwnd == unsafe { GetShellWindow() } {
+        return false;
+    }
+    if unsafe { IsIconic(hwnd) }.as_bool() || !unsafe { IsWindowVisible(hwnd) }.as_bool() {
+        return false;
+    }
+
+    let mut pid = 0u32;
+    unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+    if pid == std::process::id() {
+        return false;
+    }
+
+    let mut class_buf = [0u16; 64];
+    let len = unsafe { GetClassNameW(hwnd, &mut class_buf) };
+    if len > 0 {
+        let class_name = String::from_utf16_lossy(&class_buf[..len as usize]);
+        if matches!(
+            class_name.as_str(),
+            "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd"
+        ) {
+            return false;
+        }
+    }
+
+    let mut win_rect = RECT::default();
+    if unsafe { GetWindowRect(hwnd, &mut win_rect) }.is_err() {
+        return false;
+    }
+
+    let hmon = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY) };
+    let mut info = MONITORINFO {
+        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    if !unsafe { GetMonitorInfoW(hmon, &mut info) }.as_bool() {
+        return false;
+    }
+
+    let mon = info.rcMonitor;
+    (info.dwFlags & MONITORINFOF_PRIMARY) != 0
+        && win_rect.left <= mon.left
+        && win_rect.top <= mon.top
+        && win_rect.right >= mon.right
+        && win_rect.bottom >= mon.bottom
 }

@@ -78,6 +78,10 @@ impl TrayController {
         self.auto_hide_item.is_checked()
     }
 
+    pub fn set_auto_hide_checked(&self, checked: bool) {
+        self.auto_hide_item.set_checked(checked);
+    }
+
     pub fn update_status(&self, status: &ListenerStatus, paused: bool) {
         let label = match status {
             ListenerStatus::Starting => "Status: Starting...",
