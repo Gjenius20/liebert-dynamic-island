@@ -51,3 +51,14 @@ calloop-wayland-source = "0.3"
 lto = "thin"
 strip = true
 opt-level = "s"
+
+[package.metadata.packager]
+product-name = "Liebert Dynamic Island"
+identifier = "com.liebert.dynamic-island"
+version = "0.1.0"
+out-dir = "./target/installer"
+# "nsis" menghasilkan installer .exe, "wix" menghasilkan installer .msi (keduanya mendukung uninstall Windows)
+formats = ["nsis", "wix"]
+resources = ["README.md"]
+# icons = ["assets/icon.ico"] # Tambahkan file .ico lalu aktifkan baris ini untuk ikon installer & shortcut
+

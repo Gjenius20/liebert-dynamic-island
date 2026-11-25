@@ -10,6 +10,8 @@ tags:
 
 ## 2026-11-26
 ### Added
+- `Cargo.toml`: Menambahkan blok `[package.metadata.packager]` (`product-name`, `identifier`, `version`, `out-dir`, `formats = ["nsis", "wix"]`, `resources = ["README.md"]`) untuk packaging installer Windows `.exe` (NSIS) dan `.msi` (WiX) dengan uninstaller bawaan.
+- `installer/windows/liebert-dynamic-island.iss`, `installer/windows/install.ps1`, `installer/windows/build-setup.ps1`: Menambahkan skrip setup Windows per-user (`%LOCALAPPDATA%\Programs\Liebert Dynamic Island`, tanpa hak Administrator) berupa konfigurasi Inno Setup 6 (`.iss`), builder `build-setup.ps1`, dan installer/uninstaller PowerShell mandiri `install.ps1` (shortcut Start Menu, opsi Desktop & Autostart `HKCU\...\Run`).
 - `src/pomodoro.rs`, `src/config.rs`, `src/main.rs`, `src/ui/mod.rs`, `src/ui/settings.rs`: Menambahkan fitur **Pomodoro Timer** (`Focus` / `Short Break` / `Long Break`, siklus 4 sesi, countdown di pill idle `IdleDisplayMode::Pomodoro` & otomatis saat `Auto` berjalan, tab `⏱ Timer`, ringkasan di `Overview`, notifikasi selesai fase, serta slider durasi di Settings) beserta 2 unit test di `src/pomodoro.rs`.
 - `src/platform/mod.rs`, `src/platform/windows.rs`, `src/platform/linux.rs`, `src/config.rs`, `src/ui/mod.rs`, `src/ui/settings.rs`: Menambahkan pilihan **Font** di Settings Appearance (`font_name`) yang memindai font terinstal pada perangkat (`list_installed_fonts`, filter pencarian, dan `apply_configured_fonts`).
 - `src/config.rs`, `src/ui/settings.rs`, `src/ui/mod.rs`: Menambahkan opsi **`KaraokeLyricMode::Translate`** di Settings sehingga lirik terjemahan dapat dipilih sebagai teks karaoke utama pada idle notch maupun Music Card.
