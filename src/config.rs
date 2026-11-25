@@ -47,6 +47,11 @@ pub struct Config {
     pub border_alpha: u8,
     pub corner_radius: u8,
     pub show_lyrics: bool,
+    pub dynamic_album_color: bool,
+    pub karaoke_lyrics: bool,
+    pub romaji_lyrics: bool,
+    pub translate_lyrics: bool,
+    pub lyric_translate_lang: String,
     pub show_todo: bool,
     pub show_calendar: bool,
     pub google_calendar_ics_url: String,
@@ -73,6 +78,11 @@ impl Default for Config {
             border_alpha: 36,
             corner_radius: 22,
             show_lyrics: true,
+            dynamic_album_color: true,
+            karaoke_lyrics: true,
+            romaji_lyrics: true,
+            translate_lyrics: true,
+            lyric_translate_lang: "id".to_owned(),
             show_todo: true,
             show_calendar: true,
             google_calendar_ics_url: String::new(),
@@ -145,6 +155,12 @@ impl Config {
                 self.text_color = [248, 250, 252];
                 self.border_alpha = 52;
             }
+            "crimson" => {
+                self.bg_color = [30, 29, 28, 248];
+                self.accent_color = [224, 92, 98];
+                self.text_color = [248, 246, 245];
+                self.border_alpha = 28;
+            }
             _ => {}
         }
     }
@@ -166,6 +182,9 @@ mod tests {
         assert_eq!(cfg.idle_display, IdleDisplayMode::Auto);
         assert_eq!(cfg.clock_timezone, "Local");
         assert!(cfg.show_lyrics && cfg.show_todo && cfg.show_calendar);
+        assert!(cfg.dynamic_album_color);
+        assert!(cfg.karaoke_lyrics && cfg.romaji_lyrics && cfg.translate_lyrics);
+        assert_eq!(cfg.lyric_translate_lang, "id");
     }
 
     #[test]
@@ -174,6 +193,10 @@ mod tests {
             auto_hide_when_idle: true,
             auto_hide_delay_secs: 12,
             hide_in_fullscreen: false,
+            karaoke_lyrics: false,
+            romaji_lyrics: false,
+            translate_lyrics: true,
+            lyric_translate_lang: "en".to_owned(),
             idle_display: IdleDisplayMode::Clock,
             clock_timezone: "Asia/Jakarta".to_owned(),
             clock_24h: false,
