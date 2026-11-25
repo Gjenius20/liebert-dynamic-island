@@ -1,5 +1,7 @@
 # Liebert Dynamic Island (Lidi)
 
+<img width="439" height="188" alt="{4A867C8C-1ED8-449F-88FD-4F100F04841C}" src="https://github.com/user-attachments/assets/beecbc2a-f66c-43bf-b421-154a759ec6c9" />
+
 Lightweight native Rust Dynamic Island overlay for **Windows 10/11** and **Linux (X11/Wayland)** that surfaces system notifications, media controls, synced karaoke lyrics, a Pomodoro timer, a local todo list, and Google Calendar alerts at the top-center of your screen without stealing window focus.
 
 ## Key Features
