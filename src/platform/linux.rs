@@ -7,7 +7,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use zbus::zvariant::{OwnedValue, Value};
 use zbus::{Connection, Proxy, connection, interface};
 
-use crate::platform::{MediaCommand, MediaTrack, PlatformEvent};
+use crate::platform::{
+    AlbumArt, MediaCommand, MediaTrack, PlatformEvent, RepeatMode, decode_album_art,
+};
 use crate::state::{ListenerStatus, NotificationItem};
 
 // shortcut: Wayland wlr-layer-shell positioning unsupported in winit/eframe, upgrade to smithay-client-toolkit or iced_layershell when targeting native Wayland positioning.
@@ -144,7 +146,8 @@ pub fn spawn_media_listener(
     std::thread::Builder::new()
         .name("linux-mpris-media".to_owned())
         .spawn(move || {
-            let mut last_snapshot: Option<(String, String, bool, u64)> = None;
+            let mut last_snapshot: Option<(String, String, bool, u64, bool, RepeatMode)> = None;
+            let mut cached_art: Option<((String, String), Option<AlbumArt>)> = None;
             let _ = zbus::block_on(async move {
                 let conn = Connection::session().await?;
                 let dbus = zbus::fdo::DBusProxy::new(&conn).await?;
@@ -162,10 +165,11 @@ pub fn spawn_media_listener(
                         });
 
                     let current = if let Some(ref bus) = player_name {
-                        read_mpris_track(&conn, bus).await
+                        read_mpris_track(&conn, bus, &mut cached_art).await
                     } else {
                         None
                     };
+                    let cur_pos_ms = current.as_ref().map(|t| t.position_ms).unwrap_or(0);
 
                     let snapshot = current.as_ref().map(|t| {
                         (
@@ -173,6 +177,8 @@ pub fn spawn_media_listener(
                             t.artist.clone(),
                             t.is_playing,
                             t.position_ms / 1000,
+                            t.shuffle,
+                            t.repeat,
                         )
                     });
                     if snapshot != last_snapshot {
@@ -183,21 +189,91 @@ pub fn spawn_media_listener(
 
                     match cmd_rx.recv_timeout(Duration::from_millis(600)) {
                         Ok(cmd) => {
-                            if let Some(ref bus) = player_name
-                                && let Ok(player) = Proxy::new(
-                                    &conn,
-                                    bus.as_str(),
-                                    "/org/mpris/MediaPlayer2",
-                                    "org.mpris.MediaPlayer2.Player",
-                                )
-                                .await
-                            {
-                                let method = match cmd {
-                                    MediaCommand::TogglePlayPause => "PlayPause",
-                                    MediaCommand::Next => "Next",
-                                    MediaCommand::Previous => "Previous",
-                                };
-                                let _: Result<(), _> = player.call(method, &()).await;
+                            if let Some(ref bus) = player_name {
+                                match cmd {
+                                    MediaCommand::TogglePlayPause
+                                    | MediaCommand::Next
+                                    | MediaCommand::Previous => {
+                                        if let Ok(player) = Proxy::new(
+                                            &conn,
+                                            bus.as_str(),
+                                            "/org/mpris/MediaPlayer2",
+                                            "org.mpris.MediaPlayer2.Player",
+                                        )
+                                        .await
+                                        {
+                                            let method = match cmd {
+                                                MediaCommand::TogglePlayPause => "PlayPause",
+                                                MediaCommand::Next => "Next",
+                                                MediaCommand::Previous => "Previous",
+                                                _ => unreachable!(),
+                                            };
+                                            let _: Result<(), _> = player.call(method, &()).await;
+                                        }
+                                    }
+                                    MediaCommand::SetShuffle(shuffle) => {
+                                        if let Ok(props) = Proxy::new(
+                                            &conn,
+                                            bus.as_str(),
+                                            "/org/mpris/MediaPlayer2",
+                                            "org.freedesktop.DBus.Properties",
+                                        )
+                                        .await
+                                        {
+                                            let _: Result<(), _> = props
+                                                .call(
+                                                    "Set",
+                                                    &(
+                                                        "org.mpris.MediaPlayer2.Player",
+                                                        "Shuffle",
+                                                        Value::Bool(shuffle),
+                                                    ),
+                                                )
+                                                .await;
+                                        }
+                                    }
+                                    MediaCommand::SetRepeat(mode) => {
+                                        if let Ok(props) = Proxy::new(
+                                            &conn,
+                                            bus.as_str(),
+                                            "/org/mpris/MediaPlayer2",
+                                            "org.freedesktop.DBus.Properties",
+                                        )
+                                        .await
+                                        {
+                                            let loop_str = match mode {
+                                                RepeatMode::Off => "None",
+                                                RepeatMode::All => "Playlist",
+                                                RepeatMode::One => "Track",
+                                            };
+                                            let _: Result<(), _> = props
+                                                .call(
+                                                    "Set",
+                                                    &(
+                                                        "org.mpris.MediaPlayer2.Player",
+                                                        "LoopStatus",
+                                                        Value::from(loop_str),
+                                                    ),
+                                                )
+                                                .await;
+                                        }
+                                    }
+                                    MediaCommand::SeekMs(target_ms) => {
+                                        if let Ok(player) = Proxy::new(
+                                            &conn,
+                                            bus.as_str(),
+                                            "/org/mpris/MediaPlayer2",
+                                            "org.mpris.MediaPlayer2.Player",
+                                        )
+                                        .await
+                                        {
+                                            let delta_us =
+                                                (target_ms as i64 - cur_pos_ms as i64) * 1000;
+                                            let _: Result<(), _> =
+                                                player.call("Seek", &(delta_us,)).await;
+                                        }
+                                    }
+                                }
                             }
                             last_snapshot = None;
                         }
@@ -211,7 +287,11 @@ pub fn spawn_media_listener(
         .expect("spawn linux media thread");
 }
 
-async fn read_mpris_track(conn: &Connection, bus: &str) -> Option<MediaTrack> {
+async fn read_mpris_track(
+    conn: &Connection,
+    bus: &str,
+    cached_art: &mut Option<((String, String), Option<AlbumArt>)>,
+) -> Option<MediaTrack> {
     let props = Proxy::new(
         conn,
         bus,
@@ -230,6 +310,19 @@ async fn read_mpris_track(conn: &Connection, bus: &str) -> Option<MediaTrack> {
         .and_then(|v| <&str>::try_from(v).ok())
         .unwrap_or("Stopped");
     let is_playing = status == "Playing";
+    let shuffle = all
+        .get("Shuffle")
+        .and_then(|v| bool::try_from(v).ok())
+        .unwrap_or(false);
+    let repeat = all
+        .get("LoopStatus")
+        .and_then(|v| <&str>::try_from(v).ok())
+        .map(|s| match s {
+            "Track" => RepeatMode::One,
+            "Playlist" => RepeatMode::All,
+            _ => RepeatMode::Off,
+        })
+        .unwrap_or(RepeatMode::Off);
 
     let position_ms = all
         .get("Position")
@@ -266,12 +359,55 @@ async fn read_mpris_track(conn: &Connection, bus: &str) -> Option<MediaTrack> {
         .map(|us| (us / 1000).max(0) as u64)
         .unwrap_or(0);
 
+    let key = (title.clone(), artist.clone());
+    let album_art = if let Some((cached_key, art)) = cached_art.as_ref()
+        && *cached_key == key
+    {
+        art.clone()
+    } else {
+        let art_url = dict
+            .get::<&str, Value>(&"mpris:artUrl")
+            .ok()
+            .flatten()
+            .and_then(|v| <&str>::try_from(v).ok());
+        let art = art_url.and_then(load_art_from_url);
+        *cached_art = Some((key, art.clone()));
+        art
+    };
+
     Some(MediaTrack {
         title,
         artist,
         is_playing,
         position_ms,
         duration_ms,
+        shuffle,
+        repeat,
+        album_art,
         updated_at: Instant::now(),
     })
+}
+
+fn load_art_from_url(url: &str) -> Option<AlbumArt> {
+    if let Some(path) = url.strip_prefix("file://") {
+        let bytes = std::fs::read(path).ok()?;
+        return decode_album_art(&bytes);
+    }
+    if url.starts_with("https://") || url.starts_with("http://") {
+        let config = ureq::Agent::config_builder()
+            .timeout_global(Some(Duration::from_secs(3)))
+            .build();
+        let agent: ureq::Agent = config.into();
+        let bytes = agent
+            .get(url)
+            .call()
+            .ok()?
+            .body_mut()
+            .with_config()
+            .limit(4 * 1024 * 1024)
+            .read_to_vec()
+            .ok()?;
+        return decode_album_art(&bytes);
+    }
+    None
 }

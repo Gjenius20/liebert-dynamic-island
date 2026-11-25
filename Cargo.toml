@@ -12,6 +12,7 @@ toml = "1.2"
 directories = "6.0"
 tray-icon = "0.27"
 ureq = "3.5"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 chrono-tz = "0.10"
 
@@ -20,7 +21,9 @@ windows = { version = "0.62", features = [
     "ApplicationModel",
     "Foundation",
     "Foundation_Collections",
+    "Media",
     "Media_Control",
+    "Storage_Streams",
     "UI_Notifications",
     "UI_Notifications_Management",
     "Win32_Foundation",
