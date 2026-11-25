@@ -1,8 +1,12 @@
 use std::collections::HashSet;
 use std::sync::{Arc, mpsc};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use windows::Foundation::TypedEventHandler;
+use windows::Media::Control::{
+    GlobalSystemMediaTransportControlsSessionManager,
+    GlobalSystemMediaTransportControlsSessionPlaybackStatus,
+};
 use windows::UI::Notifications::Management::{
     UserNotificationListener, UserNotificationListenerAccessStatus,
 };
@@ -10,14 +14,15 @@ use windows::UI::Notifications::{
     KnownNotificationBindings, NotificationKinds, UserNotification,
     UserNotificationChangedEventArgs,
 };
+use windows::Win32::Foundation::{POINT, RECT};
 use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
 use windows::Win32::UI::WindowsAndMessaging::{
-    FindWindowW, GWL_EXSTYLE, GetSystemMetrics, GetWindowLongPtrW, SM_CXSCREEN, SetWindowLongPtrW,
-    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    FindWindowW, GWL_EXSTYLE, GetCursorPos, GetSystemMetrics, GetWindowLongPtrW, GetWindowRect,
+    SM_CXSCREEN, SetWindowLongPtrW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
 };
 use windows::core::HSTRING;
 
-use crate::platform::PlatformEvent;
+use crate::platform::{MediaCommand, MediaTrack, PlatformEvent};
 use crate::state::{ListenerStatus, NotificationItem};
 
 fn init_com_mta() {
@@ -246,6 +251,109 @@ pub fn spawn_listener(tx: mpsc::Sender<PlatformEvent>, on_wake: Arc<dyn Fn() + S
         .expect("spawn windows notification thread");
 }
 
+pub fn spawn_media_listener(
+    tx: mpsc::Sender<PlatformEvent>,
+    cmd_rx: mpsc::Receiver<MediaCommand>,
+    on_wake: Arc<dyn Fn() + Send + Sync>,
+) {
+    std::thread::Builder::new()
+        .name("win-smtc-media".to_owned())
+        .spawn(move || {
+            init_com_mta();
+            let Ok(manager) =
+                GlobalSystemMediaTransportControlsSessionManager::RequestAsync()
+                    .and_then(|op| op.join())
+            else {
+                return;
+            };
+
+            let mut last_snapshot: Option<(String, String, bool, u64)> = None;
+            loop {
+                let current = read_smtc_track(&manager);
+                let snapshot = current.as_ref().map(|t| {
+                    (
+                        t.title.clone(),
+                        t.artist.clone(),
+                        t.is_playing,
+                        t.position_ms / 1000,
+                    )
+                });
+                if snapshot != last_snapshot {
+                    last_snapshot = snapshot;
+                    let _ = tx.send(PlatformEvent::Media(current));
+                    on_wake();
+                }
+
+                match cmd_rx.recv_timeout(Duration::from_millis(600)) {
+                    Ok(cmd) => {
+                        if let Ok(session) = manager.GetCurrentSession() {
+                            match cmd {
+                                MediaCommand::TogglePlayPause => {
+                                    let _ = session.TryTogglePlayPauseAsync();
+                                }
+                                MediaCommand::Next => {
+                                    let _ = session.TrySkipNextAsync();
+                                }
+                                MediaCommand::Previous => {
+                                    let _ = session.TrySkipPreviousAsync();
+                                }
+                            }
+                        }
+                        last_snapshot = None;
+                    }
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                }
+            }
+        })
+        .expect("spawn windows media thread");
+}
+
+fn read_smtc_track(
+    manager: &GlobalSystemMediaTransportControlsSessionManager,
+) -> Option<MediaTrack> {
+    let session = manager.GetCurrentSession().ok()?;
+    let props = session.TryGetMediaPropertiesAsync().ok()?.join().ok()?;
+    let title = props.Title().ok()?.to_string().trim().to_owned();
+    if title.is_empty() {
+        return None;
+    }
+    let artist = props
+        .Artist()
+        .map(|s| s.to_string().trim().to_owned())
+        .unwrap_or_default();
+
+    let is_playing = session
+        .GetPlaybackInfo()
+        .and_then(|info| info.PlaybackStatus())
+        .map(|s| s == GlobalSystemMediaTransportControlsSessionPlaybackStatus::Playing)
+        .unwrap_or(false);
+
+    let (position_ms, duration_ms) = session
+        .GetTimelineProperties()
+        .map(|tl| {
+            let pos = tl
+                .Position()
+                .map(|t| (t.Duration / 10_000).max(0) as u64)
+                .unwrap_or(0);
+            let dur = tl
+                .EndTime()
+                .map(|t| (t.Duration / 10_000).max(0) as u64)
+                .unwrap_or(0);
+            (pos, dur)
+        })
+        .unwrap_or((0, 0));
+
+    Some(MediaTrack {
+        title,
+        artist,
+        is_playing,
+        position_ms,
+        duration_ms,
+        updated_at: Instant::now(),
+    })
+}
+
 pub fn primary_monitor_logical_width() -> f32 {
     let px = unsafe { GetSystemMetrics(SM_CXSCREEN) };
     if px > 0 { px as f32 } else { 1920.0 }
@@ -266,4 +374,23 @@ pub fn apply_no_activate_hook(window_title: &str) {
             SetWindowLongPtrW(hwnd, GWL_EXSTYLE, desired);
         }
     }
+}
+
+pub fn is_cursor_over_window(window_title: &str, padding_px: i32) -> Option<bool> {
+    let title = HSTRING::from(window_title);
+    let hwnd = unsafe { FindWindowW(None, &title) }.ok()?;
+    if hwnd.is_invalid() {
+        return None;
+    }
+    let mut rect = RECT::default();
+    unsafe { GetWindowRect(hwnd, &mut rect) }.ok()?;
+    let mut pt = POINT::default();
+    unsafe { GetCursorPos(&mut pt) }.ok()?;
+
+    Some(
+        pt.x >= rect.left - padding_px
+            && pt.x <= rect.right + padding_px
+            && pt.y >= rect.top - padding_px
+            && pt.y <= rect.bottom + padding_px,
+    )
 }

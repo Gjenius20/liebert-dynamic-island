@@ -5,6 +5,7 @@ use crate::state::ListenerStatus;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrayAction {
+    OpenSettings,
     TogglePause,
     ToggleAutoHide,
     Exit,
@@ -13,6 +14,7 @@ pub enum TrayAction {
 pub struct TrayController {
     _tray: TrayIcon,
     status_item: MenuItem,
+    settings_item: MenuItem,
     pause_item: MenuItem,
     auto_hide_item: CheckMenuItem,
     exit_item: MenuItem,
@@ -22,6 +24,7 @@ impl TrayController {
     pub fn new(auto_hide: bool) -> Result<Self, String> {
         let menu = Menu::new();
         let status_item = MenuItem::new("Status: Starting...", false, None);
+        let settings_item = MenuItem::new("Settings...", true, None);
         let pause_item = MenuItem::new("Pause Notifications", true, None);
         let auto_hide_item = CheckMenuItem::new("Auto-hide when idle", true, auto_hide, None);
         let exit_item = MenuItem::new("Exit", true, None);
@@ -29,6 +32,7 @@ impl TrayController {
         menu.append_items(&[
             &status_item,
             &PredefinedMenuItem::separator(),
+            &settings_item,
             &pause_item,
             &auto_hide_item,
             &PredefinedMenuItem::separator(),
@@ -47,6 +51,7 @@ impl TrayController {
         Ok(Self {
             _tray: tray,
             status_item,
+            settings_item,
             pause_item,
             auto_hide_item,
             exit_item,
@@ -56,7 +61,9 @@ impl TrayController {
     pub fn poll_actions(&self) -> Vec<TrayAction> {
         let mut actions = Vec::new();
         while let Ok(event) = MenuEvent::receiver().try_recv() {
-            if event.id == *self.pause_item.id() {
+            if event.id == *self.settings_item.id() {
+                actions.push(TrayAction::OpenSettings);
+            } else if event.id == *self.pause_item.id() {
                 actions.push(TrayAction::TogglePause);
             } else if event.id == *self.auto_hide_item.id() {
                 actions.push(TrayAction::ToggleAutoHide);

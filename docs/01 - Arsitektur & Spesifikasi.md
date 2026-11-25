@@ -11,29 +11,34 @@ tags:
 
 Referensi spesifikasi produk: [[PRD-LiebertDynamicIsland-MVP]].
 
-## Tech Stack (MVP)
+## Tech Stack (Aktual)
 - **Bahasa:** Rust (`edition = "2024"`, `rustc 1.99.1`)
-- **UI / Renderer:** `eframe 0.37` (`egui`, `Renderer::Glow`, fitur `x11` & `wayland`) — dipilih pada Fase 1; lihat [[03 - Catatan Rapat & Keputusan]]
-- **Windows Bridge:** `windows 0.62` — Win32 windowing (`WS_EX_NOACTIVATE`, `WS_EX_TOOLWINDOW`, `GetSystemMetrics`) & WinRT `UserNotificationListener`
-- **Linux Bridge:** `zbus 6.5` (D-Bus `org.freedesktop.Notifications`) + windowing `eframe`/`winit` (X11 / Wayland)
-- **System Tray & Config:** `tray-icon 0.27`, `serde 1.0`, `toml 1.2`, `directories 6.0`
+- **UI / Renderer:** `eframe 0.37` (`egui`, `Renderer::Glow`, fitur `x11` & `wayland`, multi-viewport `show_viewport_immediate` untuk Settings) — lihat [[03 - Catatan Rapat & Keputusan]]
+- **Windows Bridge:** `windows 0.62` — Win32 (`WS_EX_NOACTIVATE`, `WS_EX_TOOLWINDOW`, `GetCursorPos`/`GetWindowRect`, `GetSystemMetrics`), WinRT `UserNotificationListener`, & WinRT `Media_Control` (SMTC)
+- **Linux Bridge:** `zbus 6.5` (D-Bus `org.freedesktop.Notifications` & MPRIS2 `org.mpris.MediaPlayer2.*`) + windowing `eframe`/`winit` (X11 / Wayland)
+- **System Tray, Config & Integrations:** `tray-icon 0.27`, `serde` + `serde_json` + `toml 1.2`, `directories 6.0`, `ureq 3.5` (LRCLIB & Google Calendar `.ics`), `chrono 0.4`
 
 ## Struktur Folder Kode
 ```text
 liebert-dynamic-island/
 ├── Cargo.toml
+├── AGENTS.md                    # Panduan kolaborasi & aturan repo
 ├── docs/                        # Dokumentasi Obsidian & PRD
 └── src/
-    ├── main.rs                  # Entry point, CLI flags (--spike-notifications, --demo), & eframe runner
-    ├── config.rs                # Load/save config.toml (%APPDATA% / ~/.config)
+    ├── main.rs                  # Entry point, CLI flags, & spawn background workers
+    ├── config.rs                # Load/save config.toml (size, colors, presets, .ics URL)
     ├── state.rs                 # Island state machine (Idle, Compact, Expanded) & queue
-    ├── ui/
-    │   └── mod.rs               # Renderer pill overlay (eframe::App) & animasi lerp
+    ├── lyrics.rs                # LRC parser & LRCLIB synced lyrics fetcher
+    ├── todo.rs                  # TodoStore & persistensi todos.toml
+    ├── calendar.rs              # RFC 5545 .ics parser & Google Calendar sync worker
     ├── tray.rs                  # System tray menu & lifecycle control
+    ├── ui/
+    │   ├── mod.rs               # Overlay pill (Idle/Compact/Expanded tabs) & Win32 hover fix
+    │   └── settings.rs          # Secondary viewport Settings (Appearance, Todo, Calendar)
     └── platform/
-        ├── mod.rs               # Facade lintas OS & PlatformEvent
-        ├── windows.rs           # Win32 no-activate hook + WinRT UserNotificationListener
-        └── linux.rs             # D-Bus org.freedesktop.Notifications server (zbus)
+        ├── mod.rs               # Facade lintas OS, MediaTrack, & PlatformEvent
+        ├── windows.rs           # Win32 hover/no-activate, WinRT Notifications & SMTC
+        └── linux.rs             # D-Bus Notifications & MPRIS2 media reader
 ```
 
 ## Skema Data & State Machine
@@ -64,4 +69,4 @@ pub struct NotificationItem {
 - **Notification Latency:** `< 150 ms` dari event OS hingga frame animasi masuk.
 - **Resource Footprint:** `< 25 MB` RAM idle (`< 50 MB` saat expanded), `< 0.5%` CPU idle (event-driven, tanpa busy-polling).
 - **Rendering & DPI:** `>= 60 FPS` saat animasi transisi; Per-Monitor DPI Aware v2 (Windows) & fractional scaling (Linux).
-- **Privasi:** 100% pemrosesan lokal di memori; tanpa telemetri maupun log notifikasi persisten ke disk.
+- **Privasi & Jaringan:** Data notifikasi OS diproses 100% lokal tanpa telemetri maupun log persisten. Permintaan jaringan keluar bersifat opsional dan terbatas pada metadata lagu (`artist`/`title`) ke `lrclib.net` (saat `show_lyrics` aktif) serta fetch URL `.ics` Google Calendar yang dikonfigurasi pengguna.

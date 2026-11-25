@@ -29,13 +29,17 @@ Referensi cakupan fitur: [[PRD-LiebertDynamicIsland-MVP]].
 - [x] Implementasikan interaksi: auto-collapse 5 detik, hover expand & pause timer, serta tombol `Dismiss`
 
 ### Fase 4: Testing & Release
-- [x] Tambahkan unit test state machine & notification queue (`cargo test` — 7 tests passed)
-- [ ] Uji manual edge cases: multi-notifikasi berurutan, teks panjang/Unicode, multi-DPI scaling, dan permission denied/konflik daemon
+- [x] Tambahkan unit test state machine, config, lyrics, todo, & calendar (`cargo test` — 15 tests passed)
+- [ ] Uji manual edge cases: multi-notifikasi berurutan, teks panjang/Unicode, multi-DPI scaling, hover expand live, Spotify lyrics, & Google Calendar `.ics`
 - [ ] Verifikasi target performa `--release`: RAM idle `< 25 MB`, CPU idle `< 0.5%`, latency `< 150 ms`
 - [ ] Perbarui `README.md` (cara build, izin Windows, catatan daemon Linux) & lakukan smoke test binary Windows + Linux
 
-## P1 — Should Have (Post-MVP)
-- [ ] Media Control (*Now Playing*) via SMTC (Windows) & MPRIS2 (Linux)
+## Fitur Tambahan & Ekspansi (Di Luar Scope Awal P0)
+- [x] **Music & Synced Lyrics:** Pembaca media SMTC (Windows) & MPRIS2 (Linux) + LRC lyrics via LRCLIB (`src/lyrics.rs`)
+- [x] **Menu Settings:** Secondary viewport untuk ukuran, warna, tema preset, corner radius, dan toggle modul (`src/ui/settings.rs`)
+- [x] **Todo List:** Checklist lokal dengan persistensi `todos.toml` (`src/todo.rs`)
+- [x] **Google Calendar:** Sync feed Secret iCal `.ics` + upcoming events & alert 5 menit (`src/calendar.rs`)
+- [x] **Hover Fix:** Perbaikan hover-expand saat `Idle` & Win32 cursor hit-test untuk window `WS_EX_NOACTIVATE`
 - [ ] System HUD (indikator Volume & Brightness)
 - [ ] Fullscreen / Game Auto-Hide otomatis
 

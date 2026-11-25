@@ -7,15 +7,19 @@ description = "Lightweight native Rust Dynamic Island notification overlay for W
 [dependencies]
 eframe = { version = "0.37", default-features = false, features = ["glow", "default_fonts", "x11", "wayland"] }
 serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 toml = "1.2"
 directories = "6.0"
 tray-icon = "0.27"
+ureq = "3.5"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [
     "ApplicationModel",
     "Foundation",
     "Foundation_Collections",
+    "Media_Control",
     "UI_Notifications",
     "UI_Notifications_Management",
     "Win32_Foundation",

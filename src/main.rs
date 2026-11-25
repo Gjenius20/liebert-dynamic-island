@@ -1,8 +1,11 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod calendar;
 mod config;
+mod lyrics;
 mod platform;
 mod state;
+mod todo;
 mod tray;
 mod ui;
 
@@ -13,7 +16,7 @@ use eframe::egui;
 
 use crate::config::Config;
 use crate::tray::TrayController;
-use crate::ui::{IslandApp, WINDOW_TITLE};
+use crate::ui::{AppChannels, IslandApp, WINDOW_TITLE};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
@@ -41,8 +44,13 @@ fn main() -> ExitCode {
         }
     };
 
-    let (tx, rx) = mpsc::channel();
-    let initial_w = 132.0;
+    let (event_tx, event_rx) = mpsc::channel();
+    let (lyrics_req_tx, lyrics_req_rx) = mpsc::channel();
+    let (media_cmd_tx, media_cmd_rx) = mpsc::channel();
+    let (calendar_cmd_tx, calendar_cmd_rx) = mpsc::channel();
+
+    let initial_w = config.idle_width * config.scale;
+    let initial_h = 30.0 * config.scale;
     let initial_x = ((platform::primary_monitor_logical_width() - initial_w) * 0.5).max(0.0);
 
     let options = eframe::NativeOptions {
@@ -55,7 +63,7 @@ fn main() -> ExitCode {
             .with_taskbar(false)
             .with_active(false)
             .with_resizable(false)
-            .with_inner_size([initial_w, 30.0])
+            .with_inner_size([initial_w, initial_h])
             .with_position([initial_x, config.top_offset_px]),
         ..Default::default()
     };
@@ -65,9 +73,29 @@ fn main() -> ExitCode {
         options,
         Box::new(move |cc| {
             let egui_ctx = cc.egui_ctx.clone();
-            let wake = Arc::new(move || egui_ctx.request_repaint());
-            platform::spawn_listener(tx, wake);
-            Ok(Box::new(IslandApp::new(config, rx, tray, demo_mode)))
+            let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || egui_ctx.request_repaint());
+
+            platform::spawn_listener(event_tx.clone(), wake.clone());
+            platform::spawn_media_listener(event_tx.clone(), media_cmd_rx, wake.clone());
+            lyrics::spawn_lyrics_worker(lyrics_req_rx, event_tx.clone(), wake.clone());
+            calendar::spawn_calendar_worker(
+                config.google_calendar_ics_url.clone(),
+                calendar_cmd_rx,
+                event_tx,
+                wake,
+            );
+
+            Ok(Box::new(IslandApp::new(
+                config,
+                AppChannels {
+                    event_rx,
+                    lyrics_req_tx,
+                    media_cmd_tx,
+                    calendar_cmd_tx,
+                },
+                tray,
+                demo_mode,
+            )))
         }),
     );
 

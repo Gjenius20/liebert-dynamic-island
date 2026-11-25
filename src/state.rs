@@ -84,7 +84,11 @@ impl IslandState {
         if let Some(next) = self.queue.pop_front() {
             self.activate(next, now);
         } else {
-            self.visual = IslandVisualState::Idle;
+            self.visual = if self.hovered {
+                IslandVisualState::Expanded
+            } else {
+                IslandVisualState::Idle
+            };
             self.collapse_deadline = None;
         }
         dismissed
@@ -98,20 +102,26 @@ impl IslandState {
         self.queue.retain(|n| n.id != id);
     }
 
-    pub fn set_hovered(&mut self, hovered: bool, now: Instant) {
+    pub fn set_hovered(&mut self, hovered: bool, now: Instant) -> bool {
         if self.hovered == hovered {
-            return;
+            return false;
         }
         self.hovered = hovered;
-        if self.active.is_some() {
-            if hovered {
-                self.visual = IslandVisualState::Expanded;
-                self.collapse_deadline = None;
-            } else {
-                self.visual = IslandVisualState::Compact;
-                self.collapse_deadline = Some(now + self.collapse_timeout);
-            }
+        if hovered {
+            self.visual = IslandVisualState::Expanded;
+            self.collapse_deadline = None;
+        } else if self.active.is_some() {
+            self.visual = IslandVisualState::Compact;
+            self.collapse_deadline = Some(now + self.collapse_timeout);
+        } else {
+            self.visual = IslandVisualState::Idle;
+            self.collapse_deadline = None;
         }
+        true
+    }
+
+    pub fn set_collapse_timeout(&mut self, timeout: Duration) {
+        self.collapse_timeout = timeout;
     }
 
     pub fn tick(&mut self, now: Instant) -> bool {
@@ -258,5 +268,19 @@ mod tests {
 
         state.listener_status = ListenerStatus::AccessDenied("denied".to_owned());
         assert!(state.should_be_visible());
+    }
+
+    #[test]
+    fn hover_in_idle_expands_and_unhover_collapses_to_idle() {
+        let t0 = Instant::now();
+        let mut state = IslandState::new(false, Duration::from_secs(5));
+        assert_eq!(state.visual, IslandVisualState::Idle);
+
+        assert!(state.set_hovered(true, t0));
+        assert_eq!(state.visual, IslandVisualState::Expanded);
+        assert_eq!(state.next_deadline(), None);
+
+        assert!(state.set_hovered(false, t0 + Duration::from_secs(1)));
+        assert_eq!(state.visual, IslandVisualState::Idle);
     }
 }

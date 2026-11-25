@@ -2,11 +2,12 @@ use std::collections::HashMap;
 use std::future::pending;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, mpsc};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use zbus::{Connection, connection, interface};
+use zbus::zvariant::{OwnedValue, Value};
+use zbus::{Connection, Proxy, connection, interface};
 
-use crate::platform::PlatformEvent;
+use crate::platform::{MediaCommand, MediaTrack, PlatformEvent};
 use crate::state::{ListenerStatus, NotificationItem};
 
 // shortcut: Wayland wlr-layer-shell positioning unsupported in winit/eframe, upgrade to smithay-client-toolkit or iced_layershell when targeting native Wayland positioning.
@@ -28,7 +29,7 @@ impl NotificationServer {
         summary: &str,
         body: &str,
         _actions: Vec<&str>,
-        _hints: HashMap<&str, zbus::zvariant::OwnedValue>,
+        _hints: HashMap<&str, OwnedValue>,
         _expire_timeout: i32,
     ) -> u32 {
         let id = if replaces_id != 0 {
@@ -128,4 +129,144 @@ pub fn spawn_listener(tx: mpsc::Sender<PlatformEvent>, on_wake: Arc<dyn Fn() + S
             }
         })
         .expect("spawn linux notification thread");
+}
+
+pub fn spawn_media_listener(
+    tx: mpsc::Sender<PlatformEvent>,
+    cmd_rx: mpsc::Receiver<MediaCommand>,
+    on_wake: Arc<dyn Fn() + Send + Sync>,
+) {
+    std::thread::Builder::new()
+        .name("linux-mpris-media".to_owned())
+        .spawn(move || {
+            let mut last_snapshot: Option<(String, String, bool, u64)> = None;
+            let _ = zbus::block_on(async move {
+                let conn = Connection::session().await?;
+                let dbus = zbus::fdo::DBusProxy::new(&conn).await?;
+
+                loop {
+                    let player_name = dbus
+                        .list_names()
+                        .await
+                        .ok()
+                        .and_then(|names| {
+                            names
+                                .into_iter()
+                                .map(|n| n.to_string())
+                                .find(|n| n.starts_with("org.mpris.MediaPlayer2."))
+                        });
+
+                    let current = if let Some(ref bus) = player_name {
+                        read_mpris_track(&conn, bus).await
+                    } else {
+                        None
+                    };
+
+                    let snapshot = current.as_ref().map(|t| {
+                        (
+                            t.title.clone(),
+                            t.artist.clone(),
+                            t.is_playing,
+                            t.position_ms / 1000,
+                        )
+                    });
+                    if snapshot != last_snapshot {
+                        last_snapshot = snapshot;
+                        let _ = tx.send(PlatformEvent::Media(current));
+                        on_wake();
+                    }
+
+                    match cmd_rx.recv_timeout(Duration::from_millis(600)) {
+                        Ok(cmd) => {
+                            if let Some(ref bus) = player_name
+                                && let Ok(player) = Proxy::new(
+                                    &conn,
+                                    bus.as_str(),
+                                    "/org/mpris/MediaPlayer2",
+                                    "org.mpris.MediaPlayer2.Player",
+                                )
+                                .await
+                            {
+                                let method = match cmd {
+                                    MediaCommand::TogglePlayPause => "PlayPause",
+                                    MediaCommand::Next => "Next",
+                                    MediaCommand::Previous => "Previous",
+                                };
+                                let _: Result<(), _> = player.call(method, &()).await;
+                            }
+                            last_snapshot = None;
+                        }
+                        Err(mpsc::RecvTimeoutError::Timeout) => {}
+                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                    }
+                }
+                Ok::<(), zbus::Error>(())
+            });
+        })
+        .expect("spawn linux media thread");
+}
+
+async fn read_mpris_track(conn: &Connection, bus: &str) -> Option<MediaTrack> {
+    let props = Proxy::new(
+        conn,
+        bus,
+        "/org/mpris/MediaPlayer2",
+        "org.freedesktop.DBus.Properties",
+    )
+    .await
+    .ok()?;
+    let all: HashMap<String, OwnedValue> = props
+        .call("GetAll", &("org.mpris.MediaPlayer2.Player",))
+        .await
+        .ok()?;
+
+    let status = all
+        .get("PlaybackStatus")
+        .and_then(|v| <&str>::try_from(v).ok())
+        .unwrap_or("Stopped");
+    let is_playing = status == "Playing";
+
+    let position_ms = all
+        .get("Position")
+        .and_then(|v| i64::try_from(v).ok())
+        .map(|us| (us / 1000).max(0) as u64)
+        .unwrap_or(0);
+
+    let meta_val = all.get("Metadata")?;
+    let dict = zbus::zvariant::Dict::try_from(meta_val.downcast_ref::<Value>().ok()?).ok()?;
+
+    let title = dict
+        .get::<&str, Value>(&"xesam:title")
+        .ok()
+        .flatten()
+        .and_then(|v| <&str>::try_from(v).ok())
+        .map(|s| s.trim().to_owned())?;
+    if title.is_empty() {
+        return None;
+    }
+
+    let artist = dict
+        .get::<&str, Value>(&"xesam:artist")
+        .ok()
+        .flatten()
+        .and_then(|v| Vec::<String>::try_from(v.clone()).ok())
+        .map(|list| list.join(", "))
+        .unwrap_or_default();
+
+    let duration_ms = dict
+        .get::<&str, Value>(&"mpris:length")
+        .ok()
+        .flatten()
+        .and_then(|v| i64::try_from(v).ok())
+        .map(|us| (us / 1000).max(0) as u64)
+        .unwrap_or(0);
+
+    Some(MediaTrack {
+        title,
+        artist,
+        is_playing,
+        position_ms,
+        duration_ms,
+        updated_at: Instant::now(),
+    })
 }
