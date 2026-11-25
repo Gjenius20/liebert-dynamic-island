@@ -29,7 +29,7 @@ Referensi cakupan fitur: [[PRD-LiebertDynamicIsland-MVP]].
 - [x] Implementasikan interaksi: auto-collapse 5 detik, hover expand & pause timer, serta tombol `Dismiss`
 
 ### Fase 4: Testing & Release
-- [x] Tambahkan unit test state machine, config, clock, lyrics, todo, calendar, & album accent (`cargo test` — 23 tests passed)
+- [x] Tambahkan unit test state machine, config, clock, lyrics, todo, calendar, & album accent (`cargo test` — 25 tests passed)
 - [ ] Uji manual edge cases: multi-notifikasi berurutan, teks panjang/Unicode, multi-DPI scaling, hover expand live, top-edge hover reveal saat auto-hide, Spotify lyrics, & Google Calendar `.ics`
 - [ ] Verifikasi target performa `--release`: RAM idle `< 25 MB`, CPU idle `< 0.5%`, latency `< 150 ms`
 - [ ] Perbarui `README.md` (cara build, izin Windows, catatan daemon Linux) & lakukan smoke test binary Windows + Linux
@@ -37,7 +37,10 @@ Referensi cakupan fitur: [[PRD-LiebertDynamicIsland-MVP]].
 ## Fitur Tambahan & Ekspansi (Di Luar Scope Awal P0)
 - [x] **Music & Synced Lyrics:** Pembaca media SMTC (Windows) & MPRIS2 (Linux) + LRC lyrics via LRCLIB (`src/lyrics.rs`)
 - [x] **Karaoke, Romaji, Translate & Full Playbar:** Progressive karaoke highlight (baris/kata `<mm:ss.xx>`), romanisasi non-Latin + fallback Kana, terjemahan lirik, seekable playbar + Shuffle/Prev/Play/Next/Repeat, serta lazy CJK font fallback
-- [x] **Reference Music Card UI & Album Art:** Redesign 2-kolom dengan cover album asli (SMTC/MPRIS2), gradient wash warna dominan dinamis, multi-line wrapped karaoke `LayoutJob`, upcoming lyric preview redup, dan tombol pill `Translate`/`Romaji` di bawah
+- [x] **Reference Music Card UI & Album Art:** Redesign 2-kolom dengan cover album asli (SMTC/MPRIS2), gradient wash warna dominan dinamis, multi-line wrapped karaoke `LayoutJob`, dan upcoming lyric preview redup
+- [x] **Top-Edge Notch Dock Mode, Offline Romaji Fix & UI Polish:** Mode notch menempel tepi atas layar (`y = 0`) dengan telinga cekung + mini cover + 3-bar equalizer (sembunyi saat fullscreen), romanisasi offline `kakasi`+`any_ascii` untuk Kanji/Kana/Cina/Korea/Arab, pemindahan toggle Karaoke/Romaji/Translate ke popup Settings saja, dan polish UI menyeluruh
+- [x] **Seamless Win11 Notch, Romaji Karaoke Mode, Branded Notification Popups & Morphing Transition:** Penghapusan border/rounding DWM Windows 11 + `pin_window_top_y(..., 0)` agar menyatu sempurna di tepi atas layar, pilihan `KaraokeLyricMode` (`Original` vs `Romaji`), listener notifikasi WinRT + fallback polling `500 ms` dengan popup berwarna brand (`WhatsApp`, `Discord`, `Gmail`, browser) + `Test Popup`, serta morphing halus `Top Notch` ↔ `Floating Island` (`notch_morph`)
+- [x] **Perbaikan Stabilitas Win32 Hover, Anti-Overlap UI, Sinkronisasi Romaji & Akses Settings:** Penghapusan `DWMNCRP_DISABLED` & tombol caption Win32 (`WS_SYSMENU|WS_MINIMIZEBOX|WS_MAXIMIZEBOX`) agar tidak glitch saat hover, ekstrapolasi `LastUpdatedTime` SMTC + match durasi LRCLIB + `end_ms` jeda instrumental + `lyric_offset_ms` + dual-galley wrapped karaoke, layout header/kolom terklip rapi (`ScrollArea` lirik), serta aktivasi foreground jendela Settings (`bring_window_to_front`)
 - [x] **Menu Settings:** Secondary viewport untuk ukuran, warna, tema preset, corner radius, dan toggle modul (`src/ui/settings.rs`)
 - [x] **Todo List:** Checklist lokal dengan persistensi `todos.toml` (`src/todo.rs`)
 - [x] **Google Calendar:** Sync feed Secret iCal `.ics` + upcoming events & alert 5 menit (`src/calendar.rs`)

@@ -14,9 +14,9 @@ Referensi spesifikasi produk: [[PRD-LiebertDynamicIsland-MVP]].
 ## Tech Stack (Aktual)
 - **Bahasa:** Rust (`edition = "2024"`, `rustc 1.99.1`)
 - **UI / Renderer:** `eframe 0.37` (`egui`, `Renderer::Glow`, fitur `x11` & `wayland`, multi-viewport `show_viewport_immediate` untuk Settings) — lihat [[03 - Catatan Rapat & Keputusan]]
-- **Windows Bridge:** `windows 0.62` — Win32 (`WS_EX_NOACTIVATE`, `WS_EX_TOOLWINDOW`, `GetCursorPos`/`GetWindowRect`, `GetSystemMetrics`, `Win32_Graphics_Gdi` `GetForegroundWindow` + `GetMonitorInfoW`), WinRT `UserNotificationListener`, `Media`/`Media_Control` (SMTC + Shuffle/Repeat/Seek), & `Storage_Streams` (Album Cover)
+- **Windows Bridge:** `windows 0.62` — Win32 (`WS_EX_NOACTIVATE`, `WS_EX_TOOLWINDOW`, `GWL_STYLE` borderless `WS_POPUP` tanpa `WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX|WS_MAXIMIZEBOX`, `Win32_Graphics_Dwm` `DWMWA_WINDOW_CORNER_PREFERENCE` & `DWMWA_BORDER_COLOR` untuk menonaktifkan border/rounding DWM Windows 11, `SetWindowPos` / `pin_window_top_y` / `bring_window_to_front`, `GetCursorPos`/`GetWindowRect`, `GetSystemMetrics`, `Win32_Graphics_Gdi` `GetForegroundWindow` + `GetMonitorInfoW`), WinRT `UserNotificationListener` (+ fallback polling `500 ms` untuk `.exe` unpackaged), `Media`/`Media_Control` (SMTC + ekstrapolasi `LastUpdatedTime` + Shuffle/Repeat/Seek), & `Storage_Streams` (Album Cover)
 - **Linux Bridge:** `zbus 6.5` (D-Bus `org.freedesktop.Notifications` & MPRIS2 `org.mpris.MediaPlayer2.*` + Shuffle/Loop/Seek/`mpris:artUrl`) + windowing `eframe`/`winit` (X11 / Wayland)
-- **System Tray, Config & Integrations:** `tray-icon 0.27`, `serde` + `serde_json` + `toml 1.2`, `directories 6.0`, `ureq 3.5` (LRCLIB, Google Translate `dt=t&dt=rm`, & Google Calendar `.ics`), `image 0.25` (decode cover album & ekstraksi warna dominan), `chrono 0.4` + `chrono-tz 0.10`
+- **System Tray, Config & Integrations:** `tray-icon 0.27`, `serde` + `serde_json` + `toml 1.2`, `directories 6.0`, `ureq 3.5` (LRCLIB, Google Translate `dt=t`, & Google Calendar `.ics`), `kakasi 0.1` + `any_ascii 0.3` (romanisasi offline multi-aksara), `image 0.25` (decode cover album & ekstraksi warna dominan), `chrono 0.4` + `chrono-tz 0.10`
 
 ## Struktur Folder Kode
 ```text
@@ -56,9 +56,9 @@ pub struct NotificationItem {
 ```
 
 ### State Machine Overlay
-- **`Idle`:** Pill compact di top-center (atau tersembunyi jika `auto_hide = true`).
-- **`Compact`:** Pill melebar menampilkan ikon app, judul, dan preview singkat; timer auto-collapse default 5 detik.
-- **`Expanded`:** Aktif saat hover pada `Compact` (menjeda timer), menampilkan body lengkap & tombol `Dismiss`.
+- **`Idle`:** Pill compact di top-center atau menyatu seamless dengan tepi atas monitor (`y = 0`) lewat transisi `notch_morph` (`Top Notch` ↔ `Floating Island`), menampilkan mini cover + lirik karaoke (`Original` atau `Romaji` sesuai `karaoke_lyric_mode`, disinkronkan via `duration` LRCLIB, `end_ms` jeda instrumental, & `lyric_offset_ms`) + 3-bar equalizer saat musik diputar, jam zona waktu, atau jadwal terdekat; otomatis tersembunyi saat `auto_hide` atau `hide_in_fullscreen` aktif.
+- **`Compact`:** Pill melebar menampilkan avatar berwarna brand aplikasi (`WhatsApp`, `Discord`, `Gmail`, browser, dll.), badge nama aplikasi terpisah tanpa overlap, judul, preview singkat, serta indikator jumlah antrean; timer auto-collapse default 5 detik.
+- **`Expanded`:** Aktif saat hover pada `Compact` (menjeda timer), menampilkan slot kiri/kanan terklip bersih (tab `Home`, `♪ Music`, `☑ N`, `Cal` + tombol cepat ganti mode `Island`/`Notch` + tombol `⚙` yang membawa jendela Settings ke depan layar via `bring_window_to_front`), dan `ScrollArea` pada kolom lirik kanan. Juga menghormati opsi `show_notifications`.
 
 ## Alur Komponen Utama
 1. **Startup:** `config.rs` membaca `config.toml` → `tray.rs` membuat ikon tray → `platform` memunculkan listener notifikasi di background thread/async task → `ui` membuka overlay window dalam state `Idle`.

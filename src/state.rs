@@ -24,6 +24,7 @@ pub enum ListenerStatus {
     Listening,
     Paused,
     AccessDenied(String),
+    #[allow(dead_code)] // Constructed by the Linux D-Bus listener and fallback targets.
     Error(String),
 }
 

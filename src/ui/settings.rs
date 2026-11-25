@@ -1,12 +1,14 @@
 use std::sync::mpsc;
 
-use eframe::egui::{self, Color32, RichText, ViewportBuilder, ViewportId};
+use eframe::egui::{self, Color32, CornerRadius, RichText, Stroke, ViewportBuilder, ViewportId};
 
 use crate::calendar::{CalendarCommand, CalendarEvent, format_countdown, format_local_time, upcoming_events};
 use crate::clock::{COMMON_TIMEZONES, format_clock, is_valid_timezone};
-use crate::config::{Config, IdleDisplayMode};
+use crate::config::{Config, IdleDisplayMode, KaraokeLyricMode};
 use crate::lyrics::TRANSLATE_LANGUAGES;
 use crate::todo::TodoStore;
+
+pub const SETTINGS_WINDOW_TITLE: &str = "Liebert Dynamic Island — Settings";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsTab {
@@ -17,6 +19,7 @@ pub enum SettingsTab {
 
 pub struct SettingsWindowState<'a> {
     pub open: &'a mut bool,
+    pub focus_requested: &'a mut bool,
     pub tab: &'a mut SettingsTab,
     pub config: &'a mut Config,
     pub todos: &'a mut TodoStore,
@@ -26,6 +29,7 @@ pub struct SettingsWindowState<'a> {
     pub calendar_status: &'a str,
     pub calendar_cmd_tx: &'a mpsc::Sender<CalendarCommand>,
     pub config_dirty: &'a mut bool,
+    pub test_notification_requested: &'a mut bool,
 }
 
 pub fn render_settings_viewport(ctx: &egui::Context, st: SettingsWindowState<'_>) {
@@ -36,25 +40,46 @@ pub fn render_settings_viewport(ctx: &egui::Context, st: SettingsWindowState<'_>
     ctx.show_viewport_immediate(
         ViewportId::from_hash_of("liebert_settings"),
         ViewportBuilder::default()
-            .with_title("Liebert Dynamic Island — Settings")
-            .with_inner_size([450.0, 520.0])
+            .with_title(SETTINGS_WINDOW_TITLE)
+            .with_inner_size([450.0, 540.0])
+            .with_active(true)
             .with_resizable(true),
         |ui, _class| {
             if ui.input(|i| i.viewport().close_requested()) {
                 *st.open = false;
+                *st.focus_requested = false;
                 return;
             }
+            if *st.focus_requested {
+                ui.ctx()
+                    .send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                ui.ctx()
+                    .send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);
+            }
 
-            egui::CentralPanel::default().show(ui, |ui| {
+            apply_settings_theme(ui);
+            let panel_frame = egui::Frame::new()
+                .fill(Color32::from_rgb(19, 19, 23))
+                .inner_margin(egui::Margin::same(14));
+
+            egui::CentralPanel::default().frame(panel_frame).show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.selectable_value(st.tab, SettingsTab::Appearance, "Appearance");
                     ui.selectable_value(st.tab, SettingsTab::Todo, "Todo List");
                     ui.selectable_value(st.tab, SettingsTab::Calendar, "Google Calendar");
                 });
+                ui.add_space(4.0);
                 ui.separator();
+                ui.add_space(4.0);
 
                 egui::ScrollArea::vertical().show(ui, |ui| match *st.tab {
-                    SettingsTab::Appearance => render_appearance_tab(ui, st.config, st.config_dirty),
+                    SettingsTab::Appearance => render_appearance_tab(
+                        ui,
+                        st.config,
+                        st.config_dirty,
+                        st.test_notification_requested,
+                    ),
                     SettingsTab::Todo => {
                         render_todo_tab(ui, st.todos, st.new_todo_input);
                     }
@@ -73,7 +98,12 @@ pub fn render_settings_viewport(ctx: &egui::Context, st: SettingsWindowState<'_>
     );
 }
 
-fn render_appearance_tab(ui: &mut egui::Ui, config: &mut Config, config_dirty: &mut bool) {
+fn render_appearance_tab(
+    ui: &mut egui::Ui,
+    config: &mut Config,
+    config_dirty: &mut bool,
+    test_notification_requested: &mut bool,
+) {
     let mut changed = false;
 
     ui.label(RichText::new("Theme Presets").strong());
@@ -103,8 +133,20 @@ fn render_appearance_tab(ui: &mut egui::Ui, config: &mut Config, config_dirty: &
     changed |= ui
         .add(egui::Slider::new(&mut config.expanded_width, 320.0..=520.0).text("Expanded Width (px)"))
         .changed();
+    ui.horizontal(|ui| {
+        ui.label("Display Mode:");
+        changed |= ui
+            .selectable_value(&mut config.notch_dock_mode, true, "Top Notch")
+            .changed();
+        changed |= ui
+            .selectable_value(&mut config.notch_dock_mode, false, "Floating Island")
+            .changed();
+    });
     changed |= ui
-        .add(egui::Slider::new(&mut config.top_offset_px, 0.0..=60.0).text("Top Offset (px)"))
+        .add_enabled(
+            !config.notch_dock_mode,
+            egui::Slider::new(&mut config.top_offset_px, 0.0..=60.0).text("Top Offset (px)"),
+        )
         .changed();
     changed |= ui
         .add(egui::Slider::new(&mut config.corner_radius, 8..=28).text("Corner Radius"))
@@ -246,6 +288,17 @@ fn render_appearance_tab(ui: &mut egui::Ui, config: &mut Config, config_dirty: &
             "Hide when a fullscreen app/game is active",
         )
         .changed();
+    ui.horizontal(|ui| {
+        changed |= ui
+            .checkbox(
+                &mut config.show_notifications,
+                "Show notification popups (WhatsApp, Discord, Browser, Gmail, ...)",
+            )
+            .changed();
+        if ui.button("Test Popup").clicked() {
+            *test_notification_requested = true;
+        }
+    });
     changed |= ui
         .checkbox(&mut config.show_lyrics, "Show Music & Synced Lyrics")
         .changed();
@@ -260,8 +313,35 @@ fn render_appearance_tab(ui: &mut egui::Ui, config: &mut Config, config_dirty: &
             changed |= ui
                 .checkbox(&mut config.karaoke_lyrics, "Karaoke highlight")
                 .changed();
+            ui.horizontal(|ui| {
+                ui.label("Karaoke lyric:");
+                ui.add_enabled_ui(config.karaoke_lyrics, |ui| {
+                    egui::ComboBox::from_id_salt("karaoke_lyric_mode")
+                        .selected_text(config.karaoke_lyric_mode.label())
+                        .show_ui(ui, |ui| {
+                            for mode in [KaraokeLyricMode::Original, KaraokeLyricMode::Romaji] {
+                                if ui
+                                    .selectable_value(
+                                        &mut config.karaoke_lyric_mode,
+                                        mode,
+                                        mode.label(),
+                                    )
+                                    .changed()
+                                {
+                                    changed = true;
+                                }
+                            }
+                        });
+                });
+            });
             changed |= ui
                 .checkbox(&mut config.romaji_lyrics, "Romaji for non-Latin lyrics")
+                .changed();
+            changed |= ui
+                .add(
+                    egui::Slider::new(&mut config.lyric_offset_ms, -5000..=5000)
+                        .text("Lyric sync offset (ms)"),
+                )
                 .changed();
             ui.horizontal(|ui| {
                 changed |= ui
@@ -369,6 +449,23 @@ fn render_todo_tab(ui: &mut egui::Ui, todos: &mut TodoStore, new_todo_input: &mu
     if dirty && let Err(err) = todos.save() {
         eprintln!("Failed to save todos: {err}");
     }
+}
+
+fn apply_settings_theme(ui: &mut egui::Ui) {
+    let style = ui.style_mut();
+    style.visuals = egui::Visuals::dark();
+    style.visuals.panel_fill = Color32::from_rgb(19, 19, 23);
+    style.visuals.window_fill = Color32::from_rgb(19, 19, 23);
+    style.visuals.widgets.inactive.bg_fill = Color32::from_rgb(32, 32, 38);
+    style.visuals.widgets.inactive.weak_bg_fill = Color32::from_rgb(32, 32, 38);
+    style.visuals.widgets.inactive.corner_radius = CornerRadius::same(7);
+    style.visuals.widgets.hovered.bg_fill = Color32::from_rgb(46, 46, 56);
+    style.visuals.widgets.hovered.weak_bg_fill = Color32::from_rgb(46, 46, 56);
+    style.visuals.widgets.hovered.corner_radius = CornerRadius::same(7);
+    style.visuals.widgets.active.corner_radius = CornerRadius::same(7);
+    style.visuals.selection.bg_fill = Color32::from_rgba_unmultiplied(224, 92, 98, 175);
+    style.visuals.selection.stroke = Stroke::new(1.0, Color32::from_rgb(224, 92, 98));
+    style.spacing.item_spacing = egui::vec2(8.0, 6.0);
 }
 
 fn render_calendar_tab(

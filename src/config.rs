@@ -26,6 +26,22 @@ impl IdleDisplayMode {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum KaraokeLyricMode {
+    #[default]
+    Original,
+    Romaji,
+}
+
+impl KaraokeLyricMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Original => "Original",
+            Self::Romaji => "Romaji (when available)",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Config {
@@ -33,6 +49,7 @@ pub struct Config {
     pub idle_width: f32,
     pub expanded_width: f32,
     pub top_offset_px: f32,
+    pub notch_dock_mode: bool,
     pub collapse_timeout_secs: u64,
     pub auto_hide_when_idle: bool,
     pub auto_hide_delay_secs: u64,
@@ -46,12 +63,15 @@ pub struct Config {
     pub text_color: [u8; 3],
     pub border_alpha: u8,
     pub corner_radius: u8,
+    pub show_notifications: bool,
     pub show_lyrics: bool,
     pub dynamic_album_color: bool,
     pub karaoke_lyrics: bool,
+    pub karaoke_lyric_mode: KaraokeLyricMode,
     pub romaji_lyrics: bool,
     pub translate_lyrics: bool,
     pub lyric_translate_lang: String,
+    pub lyric_offset_ms: i64,
     pub show_todo: bool,
     pub show_calendar: bool,
     pub google_calendar_ics_url: String,
@@ -64,6 +84,7 @@ impl Default for Config {
             idle_width: 140.0,
             expanded_width: 390.0,
             top_offset_px: 10.0,
+            notch_dock_mode: true,
             collapse_timeout_secs: 5,
             auto_hide_when_idle: false,
             auto_hide_delay_secs: 5,
@@ -77,12 +98,15 @@ impl Default for Config {
             text_color: [245, 245, 248],
             border_alpha: 36,
             corner_radius: 22,
+            show_notifications: true,
             show_lyrics: true,
             dynamic_album_color: true,
             karaoke_lyrics: true,
+            karaoke_lyric_mode: KaraokeLyricMode::Original,
             romaji_lyrics: true,
             translate_lyrics: true,
             lyric_translate_lang: "id".to_owned(),
+            lyric_offset_ms: 0,
             show_todo: true,
             show_calendar: true,
             google_calendar_ics_url: String::new(),
@@ -115,6 +139,7 @@ impl Config {
         cfg.collapse_timeout_secs = cfg.collapse_timeout_secs.clamp(2, 15);
         cfg.auto_hide_delay_secs = cfg.auto_hide_delay_secs.clamp(0, 60);
         cfg.corner_radius = cfg.corner_radius.clamp(8, 28);
+        cfg.lyric_offset_ms = cfg.lyric_offset_ms.clamp(-5000, 5000);
         cfg
     }
 
@@ -176,15 +201,18 @@ mod tests {
         assert!(!cfg.auto_hide_when_idle);
         assert_eq!(cfg.scale, 1.0);
         assert_eq!(cfg.top_offset_px, 10.0);
+        assert!(cfg.notch_dock_mode);
         assert_eq!(cfg.collapse_timeout_secs, 5);
         assert_eq!(cfg.auto_hide_delay_secs, 5);
         assert!(cfg.hide_in_fullscreen);
         assert_eq!(cfg.idle_display, IdleDisplayMode::Auto);
         assert_eq!(cfg.clock_timezone, "Local");
-        assert!(cfg.show_lyrics && cfg.show_todo && cfg.show_calendar);
+        assert!(cfg.show_notifications && cfg.show_lyrics && cfg.show_todo && cfg.show_calendar);
         assert!(cfg.dynamic_album_color);
         assert!(cfg.karaoke_lyrics && cfg.romaji_lyrics && cfg.translate_lyrics);
+        assert_eq!(cfg.karaoke_lyric_mode, KaraokeLyricMode::Original);
         assert_eq!(cfg.lyric_translate_lang, "id");
+        assert_eq!(cfg.lyric_offset_ms, 0);
     }
 
     #[test]
@@ -193,15 +221,19 @@ mod tests {
             auto_hide_when_idle: true,
             auto_hide_delay_secs: 12,
             hide_in_fullscreen: false,
+            show_notifications: false,
             karaoke_lyrics: false,
+            karaoke_lyric_mode: KaraokeLyricMode::Romaji,
             romaji_lyrics: false,
             translate_lyrics: true,
             lyric_translate_lang: "en".to_owned(),
+            lyric_offset_ms: -450,
             idle_display: IdleDisplayMode::Clock,
             clock_timezone: "Asia/Jakarta".to_owned(),
             clock_24h: false,
             clock_show_seconds: true,
             top_offset_px: 14.5,
+            notch_dock_mode: false,
             collapse_timeout_secs: 8,
             google_calendar_ics_url: "https://calendar.google.com/calendar/ical/test/basic.ics"
                 .to_owned(),

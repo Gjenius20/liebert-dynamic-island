@@ -26,6 +26,7 @@ pub struct LyricWord {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LyricLine {
     pub time_ms: u64,
+    pub end_ms: Option<u64>,
     pub text: String,
     pub words: Vec<LyricWord>,
     pub romaji: Option<String>,
@@ -51,6 +52,7 @@ pub enum LyricsData {
 pub struct LyricsRequest {
     pub artist: String,
     pub title: String,
+    pub duration_secs: Option<u64>,
     pub translate_lang: Option<String>,
     pub need_romaji: bool,
 }
@@ -69,12 +71,14 @@ pub struct ActiveKaraoke<'a> {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct LrcLibResponse {
+    duration: Option<f64>,
     synced_lyrics: Option<String>,
     plain_lyrics: Option<String>,
 }
 
 pub fn parse_lrc(lrc: &str) -> Vec<LyricLine> {
-    let mut out = Vec::new();
+    type RawEntry = (u64, Option<(String, Vec<LyricWord>)>);
+    let mut entries: Vec<RawEntry> = Vec::new();
     for raw_line in lrc.lines() {
         let mut rest = raw_line.trim();
         let mut timestamps = Vec::new();
@@ -91,21 +95,36 @@ pub fn parse_lrc(lrc: &str) -> Vec<LyricLine> {
         if timestamps.is_empty() {
             continue;
         }
-        let (text, words) = parse_inline_words(rest);
-        if text.is_empty() {
-            continue;
-        }
+        let parsed = parse_inline_words(rest);
+        let payload = if parsed.0.is_empty() {
+            None
+        } else {
+            Some(parsed)
+        };
         for time_ms in timestamps {
+            entries.push((time_ms, payload.clone()));
+        }
+    }
+    entries.sort_by_key(|(time_ms, _)| *time_ms);
+
+    let mut out: Vec<LyricLine> = Vec::new();
+    for (time_ms, payload) in entries {
+        if let Some((text, words)) = payload {
             out.push(LyricLine {
                 time_ms,
-                text: text.clone(),
-                words: words.clone(),
+                end_ms: None,
+                text,
+                words,
                 romaji: None,
                 translation: None,
             });
+        } else if let Some(prev) = out.last_mut()
+            && prev.end_ms.is_none()
+            && time_ms > prev.time_ms
+        {
+            prev.end_ms = Some(time_ms);
         }
     }
-    out.sort_by_key(|line| line.time_ms);
     out
 }
 
@@ -205,7 +224,17 @@ pub fn active_karaoke(data: &LyricsData, position_ms: u64) -> Option<ActiveKarao
             let next_ms = next_line
                 .map(|l| l.time_ms)
                 .unwrap_or_else(|| curr.time_ms.saturating_add(4000));
-            let progress = compute_line_progress(curr, position_ms, next_ms);
+            let effective_end_ms = match curr.end_ms {
+                Some(end) if end > curr.time_ms => end.min(next_ms),
+                _ => {
+                    if next_ms.saturating_sub(curr.time_ms) > 10_000 {
+                        curr.time_ms.saturating_add(7000)
+                    } else {
+                        next_ms
+                    }
+                }
+            };
+            let progress = compute_line_progress(curr, position_ms, effective_end_ms);
             Some(ActiveKaraoke {
                 text: curr.text.as_str(),
                 progress,
@@ -278,175 +307,27 @@ pub fn has_cjk_or_hangul(text: &str) -> bool {
     })
 }
 
-pub fn kana_to_romaji(text: &str) -> String {
-    let chars: Vec<char> = text.chars().map(katakana_to_hiragana).collect();
-    let mut out = String::with_capacity(chars.len() * 2);
-    let mut i = 0;
-
-    while i < chars.len() {
-        let c = chars[i];
-        if c == 'っ' {
-            if let Some(&next) = chars.get(i + 1)
-                && let Some(rom) = kana_pair_or_single(next, chars.get(i + 2).copied()).0
-                && let Some(first) = rom.chars().next()
-                && first.is_ascii_alphabetic()
-                && !matches!(first, 'a' | 'i' | 'u' | 'e' | 'o')
-            {
-                out.push(first);
-                i += 1;
-                continue;
-            }
-            i += 1;
-            continue;
-        }
-        if c == 'ー' {
-            if let Some(last) = out.chars().last()
-                && matches!(last, 'a' | 'i' | 'u' | 'e' | 'o')
-            {
-                out.push(last);
-            }
-            i += 1;
-            continue;
-        }
-        let next = chars.get(i + 1).copied();
-        let (rom, step) = kana_pair_or_single(c, next);
-        if let Some(r) = rom {
-            out.push_str(r);
-        } else {
-            out.push(c);
-        }
-        i += step;
-    }
-    out
+pub fn has_japanese_kana(text: &str) -> bool {
+    text.chars()
+        .any(|c| matches!(c as u32, 0x3040..=0x30FF))
 }
 
-fn katakana_to_hiragana(c: char) -> char {
-    let code = c as u32;
-    if (0x30A1..=0x30F6).contains(&code) {
-        char::from_u32(code - 0x60).unwrap_or(c)
+pub fn romanize_line(text: &str, prefer_japanese: bool) -> Option<String> {
+    if !has_non_latin_script(text) {
+        return None;
+    }
+    let raw = if prefer_japanese || has_japanese_kana(text) {
+        kakasi::convert(text).romaji
     } else {
-        c
-    }
-}
-
-fn kana_pair_or_single(c: char, next: Option<char>) -> (Option<&'static str>, usize) {
-    if let Some(n) = next {
-        let pair = match (c, n) {
-            ('き', 'ゃ') => Some("kya"),
-            ('き', 'ゅ') => Some("kyu"),
-            ('き', 'ょ') => Some("kyo"),
-            ('ぎ', 'ゃ') => Some("gya"),
-            ('ぎ', 'ゅ') => Some("gyu"),
-            ('ぎ', 'ょ') => Some("gyo"),
-            ('し', 'ゃ') => Some("sha"),
-            ('し', 'ゅ') => Some("shu"),
-            ('し', 'ょ') => Some("sho"),
-            ('じ', 'ゃ') => Some("ja"),
-            ('じ', 'ゅ') => Some("ju"),
-            ('じ', 'ょ') => Some("jo"),
-            ('ち', 'ゃ') => Some("cha"),
-            ('ち', 'ゅ') => Some("chu"),
-            ('ち', 'ょ') => Some("cho"),
-            ('に', 'ゃ') => Some("nya"),
-            ('に', 'ゅ') => Some("nyu"),
-            ('に', 'ょ') => Some("nyo"),
-            ('ひ', 'ゃ') => Some("hya"),
-            ('ひ', 'ゅ') => Some("hyu"),
-            ('ひ', 'ょ') => Some("hyo"),
-            ('び', 'ゃ') => Some("bya"),
-            ('び', 'ゅ') => Some("byu"),
-            ('び', 'ょ') => Some("byo"),
-            ('ぴ', 'ゃ') => Some("pya"),
-            ('ぴ', 'ゅ') => Some("pyu"),
-            ('ぴ', 'ょ') => Some("pyo"),
-            ('み', 'ゃ') => Some("mya"),
-            ('み', 'ゅ') => Some("myu"),
-            ('み', 'ょ') => Some("myo"),
-            ('り', 'ゃ') => Some("rya"),
-            ('り', 'ゅ') => Some("ryu"),
-            ('り', 'ょ') => Some("ryo"),
-            _ => None,
-        };
-        if pair.is_some() {
-            return (pair, 2);
-        }
-    }
-
-    let single = match c {
-        'あ' | 'ぁ' => Some("a"),
-        'い' | 'ぃ' => Some("i"),
-        'う' | 'ぅ' => Some("u"),
-        'え' | 'ぇ' => Some("e"),
-        'お' | 'ぉ' => Some("o"),
-        'か' => Some("ka"),
-        'き' => Some("ki"),
-        'く' => Some("ku"),
-        'け' => Some("ke"),
-        'こ' => Some("ko"),
-        'が' => Some("ga"),
-        'ぎ' => Some("gi"),
-        'ぐ' => Some("gu"),
-        'げ' => Some("ge"),
-        'ご' => Some("go"),
-        'さ' => Some("sa"),
-        'し' => Some("shi"),
-        'す' => Some("su"),
-        'せ' => Some("se"),
-        'そ' => Some("so"),
-        'ざ' => Some("za"),
-        'じ' => Some("ji"),
-        'ず' => Some("zu"),
-        'ぜ' => Some("ze"),
-        'ぞ' => Some("zo"),
-        'た' => Some("ta"),
-        'ち' => Some("chi"),
-        'つ' => Some("tsu"),
-        'て' => Some("te"),
-        'と' => Some("to"),
-        'だ' => Some("da"),
-        'ぢ' => Some("ji"),
-        'づ' => Some("zu"),
-        'で' => Some("de"),
-        'ど' => Some("do"),
-        'な' => Some("na"),
-        'に' => Some("ni"),
-        'ぬ' => Some("nu"),
-        'ね' => Some("ne"),
-        'の' => Some("no"),
-        'は' => Some("ha"),
-        'ひ' => Some("hi"),
-        'ふ' => Some("fu"),
-        'へ' => Some("he"),
-        'ほ' => Some("ho"),
-        'ば' => Some("ba"),
-        'び' => Some("bi"),
-        'ぶ' => Some("bu"),
-        'べ' => Some("be"),
-        'ぼ' => Some("bo"),
-        'ぱ' => Some("pa"),
-        'ぴ' => Some("pi"),
-        'ぷ' => Some("pu"),
-        'ぺ' => Some("pe"),
-        'ぽ' => Some("po"),
-        'ま' => Some("ma"),
-        'み' => Some("mi"),
-        'む' => Some("mu"),
-        'め' => Some("me"),
-        'も' => Some("mo"),
-        'や' | 'ゃ' => Some("ya"),
-        'ゆ' | 'ゅ' => Some("yu"),
-        'よ' | 'ょ' => Some("yo"),
-        'ら' => Some("ra"),
-        'り' => Some("ri"),
-        'る' => Some("ru"),
-        'れ' => Some("re"),
-        'ろ' => Some("ro"),
-        'わ' => Some("wa"),
-        'を' => Some("wo"),
-        'ん' => Some("n"),
-        _ => None,
+        any_ascii::any_ascii(text)
     };
-    (single, 1)
+    let normalized = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    let trimmed = normalized.trim();
+    if trimmed.is_empty() || trimmed == text.trim() {
+        None
+    } else {
+        Some(trimmed.to_owned())
+    }
 }
 
 pub fn spawn_lyrics_worker(
@@ -461,19 +342,20 @@ pub fn spawn_lyrics_worker(
                 .timeout_global(Some(Duration::from_secs(5)))
                 .build();
             let agent: Agent = config.into();
-            let mut raw_cache: HashMap<(String, String), LyricsData> = HashMap::new();
-            let mut enriched_cache: HashMap<(String, String, Option<String>, bool), LyricsData> =
-                HashMap::new();
+            type EnrichedCacheKey = (String, String, Option<u64>, Option<String>, bool);
+            let mut raw_cache: HashMap<(String, String, Option<u64>), LyricsData> = HashMap::new();
+            let mut enriched_cache: HashMap<EnrichedCacheKey, LyricsData> = HashMap::new();
 
             while let Ok(mut req) = req_rx.recv() {
                 while let Ok(newer) = req_rx.try_recv() {
                     req = newer;
                 }
 
-                let track_key = (req.artist.clone(), req.title.clone());
+                let track_key = (req.artist.clone(), req.title.clone(), req.duration_secs);
                 let full_key = (
                     req.artist.clone(),
                     req.title.clone(),
+                    req.duration_secs,
                     req.translate_lang.clone(),
                     req.need_romaji,
                 );
@@ -484,7 +366,8 @@ pub fn spawn_lyrics_worker(
                     let base = if let Some(raw) = raw_cache.get(&track_key) {
                         raw.clone()
                     } else {
-                        let fetched = fetch_lyrics(&agent, &req.artist, &req.title);
+                        let fetched =
+                            fetch_lyrics(&agent, &req.artist, &req.title, req.duration_secs);
                         raw_cache.insert(track_key, fetched.clone());
                         fetched
                     };
@@ -560,49 +443,25 @@ fn enrich_lines(
         return (romajis, translations);
     }
 
-    let any_non_latin = lines.iter().any(|l| has_non_latin_script(l));
-    if translate_lang.is_none() && (!need_romaji || !any_non_latin) {
-        return (romajis, translations);
+    if need_romaji {
+        let is_japanese_song = lines.iter().any(|l| has_japanese_kana(l));
+        for (i, orig) in lines.iter().enumerate() {
+            romajis[i] = romanize_line(orig, is_japanese_song);
+        }
     }
 
-    let tl = translate_lang.unwrap_or("en");
-    for (chunk_idx, chunk) in lines.chunks(20).enumerate() {
-        let base_idx = chunk_idx * 20;
-        let query = chunk.join("\n");
-        let (tr_block, rm_block) = query_google_translate(agent, &query, tl).unwrap_or((None, None));
-
-        if translate_lang.is_some()
-            && let Some(tr) = tr_block
-        {
-            for (offset, line_tr) in tr.lines().enumerate() {
-                if let Some(orig) = chunk.get(offset) {
-                    let trimmed = line_tr.trim();
-                    if !trimmed.is_empty() && !trimmed.eq_ignore_ascii_case(orig.trim()) {
-                        translations[base_idx + offset] = Some(trimmed.to_owned());
-                    }
-                }
-            }
-        }
-
-        if need_romaji {
-            let rm_lines: Vec<&str> = rm_block
-                .as_deref()
-                .map(|s| s.lines().collect())
-                .unwrap_or_default();
-            for (offset, orig) in chunk.iter().enumerate() {
-                if !has_non_latin_script(orig) {
-                    continue;
-                }
-                let api_rm = rm_lines
-                    .get(offset)
-                    .map(|s| s.trim())
-                    .filter(|s| !s.is_empty() && *s != orig.trim());
-                if let Some(r) = api_rm {
-                    romajis[base_idx + offset] = Some(r.to_owned());
-                } else {
-                    let fallback = kana_to_romaji(orig);
-                    if fallback != *orig && !fallback.trim().is_empty() {
-                        romajis[base_idx + offset] = Some(fallback);
+    if let Some(tl) = translate_lang {
+        for (chunk_idx, chunk) in lines.chunks(20).enumerate() {
+            let base_idx = chunk_idx * 20;
+            let query = chunk.join("\n");
+            let (tr_block, _) = query_google_translate(agent, &query, tl).unwrap_or((None, None));
+            if let Some(tr) = tr_block {
+                for (offset, line_tr) in tr.lines().enumerate() {
+                    if let Some(orig) = chunk.get(offset) {
+                        let trimmed = line_tr.trim();
+                        if !trimmed.is_empty() && !trimmed.eq_ignore_ascii_case(orig.trim()) {
+                            translations[base_idx + offset] = Some(trimmed.to_owned());
+                        }
                     }
                 }
             }
@@ -624,7 +483,6 @@ fn query_google_translate(
         .query("sl", "auto")
         .query("tl", target_lang)
         .query("dt", "t")
-        .query("dt", "rm")
         .query("q", text)
         .call()
         .ok()?
@@ -665,33 +523,62 @@ pub fn parse_google_translate_json(body: &str) -> (Option<String>, Option<String
     (tr_out, rm_out)
 }
 
-fn fetch_lyrics(agent: &Agent, artist: &str, title: &str) -> LyricsData {
+fn fetch_lyrics(
+    agent: &Agent,
+    artist: &str,
+    title: &str,
+    duration_secs: Option<u64>,
+) -> LyricsData {
     let clean_title = strip_title_noise(title);
-    if let Some(data) = query_lrclib_get(agent, artist, &clean_title) {
+    if let Some(data) = query_lrclib_get(agent, artist, &clean_title, duration_secs) {
         return data;
     }
-    query_lrclib_search(agent, artist, &clean_title).unwrap_or(LyricsData::NotFound)
+    query_lrclib_search(agent, artist, &clean_title, duration_secs)
+        .unwrap_or(LyricsData::NotFound)
 }
 
-fn query_lrclib_get(agent: &Agent, artist: &str, title: &str) -> Option<LyricsData> {
+fn query_lrclib_get(
+    agent: &Agent,
+    artist: &str,
+    title: &str,
+    duration_secs: Option<u64>,
+) -> Option<LyricsData> {
     if artist.trim().is_empty() || title.trim().is_empty() {
         return None;
     }
-    let body = agent
+    if let Some(dur) = duration_secs.filter(|&d| d > 0)
+        && let Some(data) = call_lrclib_get(agent, artist, title, Some(dur))
+    {
+        return Some(data);
+    }
+    call_lrclib_get(agent, artist, title, None)
+}
+
+fn call_lrclib_get(
+    agent: &Agent,
+    artist: &str,
+    title: &str,
+    duration_secs: Option<u64>,
+) -> Option<LyricsData> {
+    let mut req = agent
         .get("https://lrclib.net/api/get")
         .header("User-Agent", "LiebertDynamicIsland/0.1")
         .query("artist_name", artist)
-        .query("track_name", title)
-        .call()
-        .ok()?
-        .body_mut()
-        .read_to_string()
-        .ok()?;
+        .query("track_name", title);
+    if let Some(dur) = duration_secs {
+        req = req.query("duration", dur.to_string());
+    }
+    let body = req.call().ok()?.body_mut().read_to_string().ok()?;
     let parsed: LrcLibResponse = serde_json::from_str(&body).ok()?;
     response_to_lyrics(parsed)
 }
 
-fn query_lrclib_search(agent: &Agent, artist: &str, title: &str) -> Option<LyricsData> {
+fn query_lrclib_search(
+    agent: &Agent,
+    artist: &str,
+    title: &str,
+    duration_secs: Option<u64>,
+) -> Option<LyricsData> {
     let q = format!("{artist} {title}").trim().to_owned();
     if q.is_empty() {
         return None;
@@ -705,7 +592,17 @@ fn query_lrclib_search(agent: &Agent, artist: &str, title: &str) -> Option<Lyric
         .body_mut()
         .read_to_string()
         .ok()?;
-    let list: Vec<LrcLibResponse> = serde_json::from_str(&body).ok()?;
+    let mut list: Vec<LrcLibResponse> = serde_json::from_str(&body).ok()?;
+    if let Some(target) = duration_secs.filter(|&d| d > 0) {
+        let target_f = target as f64;
+        list.sort_by(|a, b| {
+            let a_synced = a.synced_lyrics.as_ref().is_some_and(|s| !s.trim().is_empty());
+            let b_synced = b.synced_lyrics.as_ref().is_some_and(|s| !s.trim().is_empty());
+            let a_diff = a.duration.map(|d| (d - target_f).abs()).unwrap_or(f64::MAX);
+            let b_diff = b.duration.map(|d| (d - target_f).abs()).unwrap_or(f64::MAX);
+            b_synced.cmp(&a_synced).then_with(|| a_diff.total_cmp(&b_diff))
+        });
+    }
     list.into_iter().find_map(response_to_lyrics)
 }
 
@@ -792,14 +689,24 @@ mod tests {
     }
 
     #[test]
-    fn non_latin_detection_and_kana_romaji_fallback() {
+    fn romanize_handles_japanese_kanji_chinese_korean_arabic_and_skips_latin() {
         assert!(!has_non_latin_script("Hello World"));
         assert!(has_non_latin_script("こんにちは世界"));
         assert!(has_non_latin_script("مرحبا"));
         assert!(has_cjk_or_hangul("さくら"));
-        assert_eq!(kana_to_romaji("さくら"), "sakura");
-        assert_eq!(kana_to_romaji("とうきょう"), "toukyou");
-        assert_eq!(kana_to_romaji("ロック"), "rokku");
+        assert_eq!(romanize_line("Hello World", false), None);
+
+        let jp = romanize_line("この先に出会うどんな友とも", true).expect("japanese romaji");
+        assert!(jp.contains("kono") && jp.contains("saki"), "got: {jp}");
+
+        let zh = romanize_line("你好世界", false).expect("chinese romanization");
+        assert!(zh.is_ascii() && !zh.is_empty(), "got: {zh}");
+
+        let ko = romanize_line("사랑해요", false).expect("korean romanization");
+        assert!(ko.is_ascii() && !ko.is_empty(), "got: {ko}");
+
+        let ar = romanize_line("مرحبا", false).expect("arabic romanization");
+        assert!(ar.is_ascii() && !ar.is_empty(), "got: {ar}");
     }
 
     #[test]
@@ -815,5 +722,23 @@ mod tests {
         let (tr, rm) = parse_google_translate_json(payload);
         assert_eq!(tr.as_deref(), Some("Aku mencintaimu\nSelamanya"));
         assert_eq!(rm.as_deref(), Some("Aishiteru\nZutto"));
+    }
+
+    #[test]
+    fn parse_lrc_sets_end_ms_on_instrumental_break_and_limits_karaoke_progress() {
+        let lrc = "\
+[00:10.00]Before solo
+[00:14.00]
+[00:40.00]After solo
+";
+        let lines = parse_lrc(lrc);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].end_ms, Some(14_000));
+        assert_eq!(lines[1].end_ms, None);
+
+        let data = LyricsData::Synced(lines);
+        let at_break = active_karaoke(&data, 15_000).expect("line before solo");
+        assert_eq!(at_break.text, "Before solo");
+        assert_eq!(at_break.progress, 1.0);
     }
 }

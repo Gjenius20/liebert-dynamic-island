@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::ffi::c_void;
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -17,15 +18,22 @@ use windows::UI::Notifications::{
     UserNotificationChangedEventArgs,
 };
 use windows::Win32::Foundation::{POINT, RECT};
+use windows::Win32::Graphics::Dwm::{
+    DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND,
+    DwmSetWindowAttribute,
+};
 use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MONITOR_DEFAULTTOPRIMARY, MONITORINFO, MonitorFromWindow,
 };
 use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
 use windows::Win32::UI::WindowsAndMessaging::{
-    FindWindowW, GWL_EXSTYLE, GetClassNameW, GetCursorPos, GetDesktopWindow, GetForegroundWindow,
-    GetShellWindow, GetSystemMetrics, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId,
-    IsIconic, IsWindowVisible, MONITORINFOF_PRIMARY, SM_CXSCREEN, SetWindowLongPtrW,
-    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    FindWindowW, GWL_EXSTYLE, GWL_STYLE, GetClassNameW, GetCursorPos, GetDesktopWindow,
+    GetForegroundWindow, GetShellWindow, GetSystemMetrics, GetWindowLongPtrW, GetWindowRect,
+    GetWindowThreadProcessId, HWND_NOTOPMOST, HWND_TOPMOST, IsIconic, IsWindowVisible,
+    MONITORINFOF_PRIMARY, SM_CXSCREEN, SW_RESTORE, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
+    SWP_NOSIZE, SWP_NOZORDER, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+    WS_BORDER, WS_CAPTION, WS_DLGFRAME, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_MAXIMIZEBOX,
+    WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
 };
 use windows::core::HSTRING;
 
@@ -65,18 +73,42 @@ fn extract_notification_item(notif: &UserNotification) -> Option<NotificationIte
         .unwrap_or_else(|_| "Windows".to_owned());
 
     let mut lines = Vec::new();
-    if let Ok(visual) = notif.Notification().and_then(|n| n.Visual())
-        && let Ok(template) = KnownNotificationBindings::ToastGeneric()
-        && let Ok(binding) = visual.GetBinding(&template)
-        && let Ok(elements) = binding.GetTextElements()
-    {
-        for i in 0..elements.Size().unwrap_or(0) {
-            if let Ok(elem) = elements.GetAt(i)
-                && let Ok(text) = elem.Text()
-            {
-                let trimmed = text.to_string().trim().to_owned();
-                if !trimmed.is_empty() {
-                    lines.push(trimmed);
+    if let Ok(visual) = notif.Notification().and_then(|n| n.Visual()) {
+        if let Ok(template) = KnownNotificationBindings::ToastGeneric()
+            && let Ok(binding) = visual.GetBinding(&template)
+            && let Ok(elements) = binding.GetTextElements()
+        {
+            for i in 0..elements.Size().unwrap_or(0) {
+                if let Ok(elem) = elements.GetAt(i)
+                    && let Ok(text) = elem.Text()
+                {
+                    let trimmed = text.to_string().trim().to_owned();
+                    if !trimmed.is_empty() {
+                        lines.push(trimmed);
+                    }
+                }
+            }
+        }
+        if lines.is_empty()
+            && let Ok(bindings) = visual.Bindings()
+        {
+            for bi in 0..bindings.Size().unwrap_or(0) {
+                if let Ok(binding) = bindings.GetAt(bi)
+                    && let Ok(elements) = binding.GetTextElements()
+                {
+                    for i in 0..elements.Size().unwrap_or(0) {
+                        if let Ok(elem) = elements.GetAt(i)
+                            && let Ok(text) = elem.Text()
+                        {
+                            let trimmed = text.to_string().trim().to_owned();
+                            if !trimmed.is_empty() {
+                                lines.push(trimmed);
+                            }
+                        }
+                    }
+                    if !lines.is_empty() {
+                        break;
+                    }
                 }
             }
         }
@@ -210,22 +242,20 @@ pub fn spawn_listener(tx: mpsc::Sender<PlatformEvent>, on_wake: Arc<dyn Fn() + S
                 Ok(())
             });
 
-            let _token = match listener.NotificationChanged(&handler) {
-                Ok(token) => token,
-                Err(e) => {
-                    let _ = tx.send(PlatformEvent::Status(ListenerStatus::Error(format!(
-                        "NotificationChanged failed: {e}"
-                    ))));
-                    on_wake();
-                    return;
-                }
-            };
+            // Fallback 500ms polling catches toasts reliably on unpackaged Win32 executables
+            // where WinRT NotificationChanged callbacks may not fire without a CoreDispatcher.
+            let _token = listener.NotificationChanged(&handler).ok();
 
             let _ = tx.send(PlatformEvent::Status(ListenerStatus::Listening));
             on_wake();
 
-            while sig_rx.recv().is_ok() {
-                while sig_rx.try_recv().is_ok() {}
+            loop {
+                match sig_rx.recv_timeout(Duration::from_millis(500)) {
+                    Ok(()) => while sig_rx.try_recv().is_ok() {},
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                }
+
                 let Ok(list) = listener
                     .GetNotificationsAsync(NotificationKinds::Toast)
                     .and_then(|op| op.join())
@@ -233,6 +263,7 @@ pub fn spawn_listener(tx: mpsc::Sender<PlatformEvent>, on_wake: Arc<dyn Fn() + S
                     continue;
                 };
 
+                let mut changed = false;
                 let mut current_ids = HashSet::new();
                 for i in 0..list.Size().unwrap_or(0) {
                     let Ok(n) = list.GetAt(i) else { continue };
@@ -242,6 +273,7 @@ pub fn spawn_listener(tx: mpsc::Sender<PlatformEvent>, on_wake: Arc<dyn Fn() + S
                         && let Some(item) = extract_notification_item(&n)
                     {
                         let _ = tx.send(PlatformEvent::Notification(item));
+                        changed = true;
                     }
                 }
 
@@ -253,8 +285,11 @@ pub fn spawn_listener(tx: mpsc::Sender<PlatformEvent>, on_wake: Arc<dyn Fn() + S
                 for id in removed {
                     seen_ids.remove(&id);
                     let _ = tx.send(PlatformEvent::Removed(id.to_string()));
+                    changed = true;
                 }
-                on_wake();
+                if changed {
+                    on_wake();
+                }
             }
         })
         .expect("spawn windows notification thread");
@@ -276,23 +311,37 @@ pub fn spawn_media_listener(
                 return;
             };
 
-            let mut last_snapshot: Option<(String, String, bool, u64, bool, RepeatMode)> = None;
+            #[derive(PartialEq, Eq)]
+            struct MediaSnapshot {
+                title: String,
+                artist: String,
+                is_playing: bool,
+                raw_pos_ms: u64,
+                last_updated_ticks: i64,
+                duration_ms: u64,
+                shuffle: bool,
+                repeat: RepeatMode,
+            }
+
+            let mut last_snapshot: Option<MediaSnapshot> = None;
             let mut cached_art: Option<((String, String), Option<AlbumArt>)> = None;
             loop {
                 let current = read_smtc_track(&manager, &mut cached_art);
-                let snapshot = current.as_ref().map(|t| {
-                    (
-                        t.title.clone(),
-                        t.artist.clone(),
-                        t.is_playing,
-                        t.position_ms / 1000,
-                        t.shuffle,
-                        t.repeat,
-                    )
+                let snapshot = current.as_ref().map(|(t, raw_pos_ms, last_updated_ticks)| {
+                    MediaSnapshot {
+                        title: t.title.clone(),
+                        artist: t.artist.clone(),
+                        is_playing: t.is_playing,
+                        raw_pos_ms: *raw_pos_ms,
+                        last_updated_ticks: *last_updated_ticks,
+                        duration_ms: t.duration_ms,
+                        shuffle: t.shuffle,
+                        repeat: t.repeat,
+                    }
                 });
                 if snapshot != last_snapshot {
                     last_snapshot = snapshot;
-                    let _ = tx.send(PlatformEvent::Media(current));
+                    let _ = tx.send(PlatformEvent::Media(current.map(|(t, _, _)| t)));
                     on_wake();
                 }
 
@@ -336,10 +385,23 @@ pub fn spawn_media_listener(
         .expect("spawn windows media thread");
 }
 
+const FILETIME_UNIX_EPOCH_TICKS: i64 = 116_444_736_000_000_000;
+
+fn current_filetime_ticks() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| {
+            FILETIME_UNIX_EPOCH_TICKS
+                .saturating_add((d.as_secs() as i64).saturating_mul(10_000_000))
+                .saturating_add((d.subsec_nanos() / 100) as i64)
+        })
+        .unwrap_or(0)
+}
+
 fn read_smtc_track(
     manager: &GlobalSystemMediaTransportControlsSessionManager,
     cached_art: &mut Option<((String, String), Option<AlbumArt>)>,
-) -> Option<MediaTrack> {
+) -> Option<(MediaTrack, u64, i64)> {
     let session = manager.GetCurrentSession().ok()?;
     let props = session.TryGetMediaPropertiesAsync().ok()?.join().ok()?;
     let title = props.Title().ok()?.to_string().trim().to_owned();
@@ -383,7 +445,7 @@ fn read_smtc_track(
         })
         .unwrap_or(RepeatMode::Off);
 
-    let (position_ms, duration_ms) = session
+    let (raw_pos_ms, duration_ms, last_updated_ticks) = session
         .GetTimelineProperties()
         .map(|tl| {
             let pos = tl
@@ -394,21 +456,40 @@ fn read_smtc_track(
                 .EndTime()
                 .map(|t| (t.Duration / 10_000).max(0) as u64)
                 .unwrap_or(0);
-            (pos, dur)
+            let updated = tl.LastUpdatedTime().map(|dt| dt.UniversalTime).unwrap_or(0);
+            (pos, dur, updated)
         })
-        .unwrap_or((0, 0));
+        .unwrap_or((0, 0, 0));
 
-    Some(MediaTrack {
-        title,
-        artist,
-        is_playing,
-        position_ms,
-        duration_ms,
-        shuffle,
-        repeat,
-        album_art,
-        updated_at: Instant::now(),
-    })
+    let mut position_ms = raw_pos_ms;
+    if is_playing && last_updated_ticks > FILETIME_UNIX_EPOCH_TICKS {
+        let now_ticks = current_filetime_ticks();
+        if now_ticks > last_updated_ticks {
+            let elapsed_ms = ((now_ticks - last_updated_ticks) / 10_000) as u64;
+            if elapsed_ms <= duration_ms.max(3_600_000) {
+                position_ms = raw_pos_ms.saturating_add(elapsed_ms);
+                if duration_ms > 0 {
+                    position_ms = position_ms.min(duration_ms);
+                }
+            }
+        }
+    }
+
+    Some((
+        MediaTrack {
+            title,
+            artist,
+            is_playing,
+            position_ms,
+            duration_ms,
+            shuffle,
+            repeat,
+            album_art,
+            updated_at: Instant::now(),
+        },
+        raw_pos_ms,
+        last_updated_ticks,
+    ))
 }
 
 fn read_smtc_thumbnail(
@@ -443,13 +524,110 @@ pub fn apply_no_activate_hook(window_title: &str) {
     if hwnd.is_invalid() {
         return;
     }
-    let style = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) };
-    let desired = style | (WS_EX_NOACTIVATE.0 as isize) | (WS_EX_TOOLWINDOW.0 as isize);
-    if style != desired {
+
+    let ex_style = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) };
+    let desired_ex = ex_style | (WS_EX_NOACTIVATE.0 as isize) | (WS_EX_TOOLWINDOW.0 as isize);
+    if ex_style != desired_ex {
         unsafe {
-            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, desired);
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, desired_ex);
         }
     }
+
+    let style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) } as u32;
+    let strip = WS_CAPTION.0
+        | WS_THICKFRAME.0
+        | WS_BORDER.0
+        | WS_DLGFRAME.0
+        | WS_SYSMENU.0
+        | WS_MINIMIZEBOX.0
+        | WS_MAXIMIZEBOX.0;
+    let desired_style = (style & !strip) | WS_POPUP.0;
+    if style != desired_style {
+        unsafe {
+            SetWindowLongPtrW(hwnd, GWL_STYLE, desired_style as isize);
+        }
+    }
+
+    unsafe {
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_WINDOW_CORNER_PREFERENCE,
+            &DWMWCP_DONOTROUND as *const _ as *const c_void,
+            std::mem::size_of_val(&DWMWCP_DONOTROUND) as u32,
+        );
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_BORDER_COLOR,
+            &DWMWA_COLOR_NONE as *const _ as *const c_void,
+            std::mem::size_of_val(&DWMWA_COLOR_NONE) as u32,
+        );
+        let _ = SetWindowPos(
+            hwnd,
+            Some(HWND_TOPMOST),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+        );
+    }
+}
+
+pub fn pin_window_top_y(window_title: &str, target_y_px: i32) {
+    let title = HSTRING::from(window_title);
+    let Ok(hwnd) = (unsafe { FindWindowW(None, &title) }) else {
+        return;
+    };
+    if hwnd.is_invalid() {
+        return;
+    }
+    let mut rect = RECT::default();
+    if unsafe { GetWindowRect(hwnd, &mut rect) }.is_ok() && rect.top != target_y_px {
+        unsafe {
+            let _ = SetWindowPos(
+                hwnd,
+                None,
+                rect.left,
+                target_y_px,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+        }
+    }
+}
+
+pub fn bring_window_to_front(window_title: &str) -> bool {
+    let title = HSTRING::from(window_title);
+    let Ok(hwnd) = (unsafe { FindWindowW(None, &title) }) else {
+        return false;
+    };
+    if hwnd.is_invalid() {
+        return false;
+    }
+    unsafe {
+        let _ = ShowWindow(hwnd, SW_RESTORE);
+        let _ = SetWindowPos(
+            hwnd,
+            Some(HWND_TOPMOST),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE,
+        );
+        let _ = SetWindowPos(
+            hwnd,
+            Some(HWND_NOTOPMOST),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE,
+        );
+        let _ = SetForegroundWindow(hwnd);
+    }
+    true
 }
 
 pub fn is_cursor_over_window(window_title: &str, padding_px: i32) -> Option<bool> {
