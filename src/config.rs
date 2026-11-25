@@ -11,6 +11,7 @@ pub enum IdleDisplayMode {
     Clock,
     Lyrics,
     NextEvent,
+    Pomodoro,
     Minimal,
 }
 
@@ -21,6 +22,7 @@ impl IdleDisplayMode {
             Self::Clock => "Clock",
             Self::Lyrics => "Lyrics / Now Playing",
             Self::NextEvent => "Next Calendar Event",
+            Self::Pomodoro => "Pomodoro Timer",
             Self::Minimal => "Minimal Dot",
         }
     }
@@ -31,6 +33,7 @@ pub enum KaraokeLyricMode {
     #[default]
     Original,
     Romaji,
+    Translate,
 }
 
 impl KaraokeLyricMode {
@@ -38,6 +41,7 @@ impl KaraokeLyricMode {
         match self {
             Self::Original => "Original",
             Self::Romaji => "Romaji (when available)",
+            Self::Translate => "Translate (when available)",
         }
     }
 }
@@ -63,6 +67,7 @@ pub struct Config {
     pub text_color: [u8; 3],
     pub border_alpha: u8,
     pub corner_radius: u8,
+    pub font_name: String,
     pub show_notifications: bool,
     pub show_lyrics: bool,
     pub dynamic_album_color: bool,
@@ -76,6 +81,10 @@ pub struct Config {
     pub lyric_offset_ms: i64,
     pub show_todo: bool,
     pub show_calendar: bool,
+    pub show_pomodoro: bool,
+    pub pomodoro_focus_mins: u64,
+    pub pomodoro_short_break_mins: u64,
+    pub pomodoro_long_break_mins: u64,
     pub google_calendar_ics_url: String,
 }
 
@@ -100,6 +109,7 @@ impl Default for Config {
             text_color: [245, 245, 248],
             border_alpha: 36,
             corner_radius: 22,
+            font_name: String::new(),
             show_notifications: true,
             show_lyrics: true,
             dynamic_album_color: true,
@@ -113,6 +123,10 @@ impl Default for Config {
             lyric_offset_ms: 0,
             show_todo: true,
             show_calendar: true,
+            show_pomodoro: true,
+            pomodoro_focus_mins: 25,
+            pomodoro_short_break_mins: 5,
+            pomodoro_long_break_mins: 15,
             google_calendar_ics_url: String::new(),
         }
     }
@@ -144,6 +158,9 @@ impl Config {
         cfg.auto_hide_delay_secs = cfg.auto_hide_delay_secs.clamp(0, 60);
         cfg.corner_radius = cfg.corner_radius.clamp(8, 28);
         cfg.lyric_offset_ms = cfg.lyric_offset_ms.clamp(-5000, 5000);
+        cfg.pomodoro_focus_mins = cfg.pomodoro_focus_mins.clamp(1, 120);
+        cfg.pomodoro_short_break_mins = cfg.pomodoro_short_break_mins.clamp(1, 60);
+        cfg.pomodoro_long_break_mins = cfg.pomodoro_long_break_mins.clamp(1, 90);
         cfg
     }
 

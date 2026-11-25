@@ -29,10 +29,10 @@ Referensi cakupan fitur: [[PRD-LiebertDynamicIsland-MVP]].
 - [x] Implementasikan interaksi: auto-collapse 5 detik, hover expand & pause timer, serta tombol `Dismiss`
 
 ### Fase 4: Testing & Release
-- [x] Tambahkan unit test state machine, config, clock, lyrics, todo, calendar, & album accent (`cargo test` — 27 tests passed)
+- [x] Tambahkan unit test state machine, config, clock, lyrics, todo, calendar, pomodoro, album accent, fullscreen rect, & text truncation (`cargo test` — 30 tests passed)
 - [ ] Uji manual edge cases: multi-notifikasi berurutan, teks panjang/Unicode, multi-DPI scaling, hover expand live, top-edge hover reveal saat auto-hide, Spotify lyrics, & Google Calendar `.ics`
 - [ ] Verifikasi target performa `--release`: RAM idle `< 25 MB`, CPU idle `< 0.5%`, latency `< 150 ms`
-- [ ] Perbarui `README.md` (cara build, izin Windows, catatan daemon Linux) & lakukan smoke test binary Windows + Linux
+- [x] Perbarui `README.md` (cara build, izin Windows, catatan daemon Linux) & lakukan smoke test binary Windows + Linux *(README.md diperbarui sesuai kode aktual; smoke test Linux masih pending)*
 
 ## Fitur Tambahan & Ekspansi (Di Luar Scope Awal P0)
 - [x] **Music & Synced Lyrics:** Pembaca media SMTC (Windows) & MPRIS2 (Linux) + LRC lyrics via LRCLIB (`src/lyrics.rs`)
@@ -41,6 +41,9 @@ Referensi cakupan fitur: [[PRD-LiebertDynamicIsland-MVP]].
 - [x] **Top-Edge Notch Dock Mode, Offline Romaji Fix & UI Polish:** Mode notch menempel tepi atas layar (`y = 0`) dengan telinga cekung + mini cover + 3-bar equalizer (sembunyi saat fullscreen), romanisasi offline `kakasi`+`any_ascii` untuk Kanji/Kana/Cina/Korea/Arab, pemindahan toggle Karaoke/Romaji/Translate ke popup Settings saja, dan polish UI menyeluruh
 - [x] **Seamless Win11 Notch, Romaji Karaoke Mode, Branded Notification Popups & Morphing Transition:** Penghapusan border/rounding DWM Windows 11 + `pin_window_top_y(..., 0)` agar menyatu sempurna di tepi atas layar, pilihan `KaraokeLyricMode` (`Original` vs `Romaji`), listener notifikasi WinRT + fallback polling `500 ms` dengan popup berwarna brand (`WhatsApp`, `Discord`, `Gmail`, browser) + `Test Popup`, serta morphing halus `Top Notch` ↔ `Floating Island` (`notch_morph`)
 - [x] **Perbaikan Stabilitas Win32 Hover, Anti-Overlap UI, Sinkronisasi Romaji & Akses Settings:** Penghapusan `DWMNCRP_DISABLED` & tombol caption Win32 (`WS_SYSMENU|WS_MINIMIZEBOX|WS_MAXIMIZEBOX`) agar tidak glitch saat hover, ekstrapolasi `LastUpdatedTime` SMTC + match durasi LRCLIB + `end_ms` jeda instrumental + `lyric_offset_ms` + dual-galley wrapped karaoke, layout header/kolom terklip rapi (`ScrollArea` lirik), serta aktivasi foreground jendela Settings (`bring_window_to_front`)
+- [x] **Fullscreen Notification Pass-Through, Mode Toggle Khusus Settings & Alignment UI:** Dynamic Island tetap tersembunyi saat fullscreen idle tetapi otomatis muncul di `HWND_TOPMOST` ketika notifikasi masuk, pergantian `Top Notch` ↔ `Floating Island` khusus di Settings, serta perataan presisi seluruh ikon (`render_icon_button`), tab, clock/minimal `LayoutJob`, playbar, dan baris ringkasan (`cargo test` 25 passed)
+- [x] **Penghapusan Garis 1px Atas (`WM_NCCALCSIZE`), Envelope Smooth Morph/Hover, Display Mode Terlihat di Settings & Fullscreen Watcher:** Subclass `overlay_wndproc` untuk menghapus inset `1 px` `winit`, animasi halus di atas envelope canvas tetap + `is_cursor_in_screen_rect`, selector Display Mode menonjol di paling atas Settings, serta `SHQueryUserNotificationState` + background `spawn_fullscreen_watcher` (`250 ms`)
+- [x] **Kanvas Permanen Anti-Flicker, Direct Win32 Visibility & Click-Through, Alignment Vektor & Fix Pengetesan:** `permanent_canvas_size` (`y = 0`) + `set_overlay_click_through` (`WS_EX_LAYERED | WS_EX_TRANSPARENT`) tanpa resize/move saat buka-tutup, `set_overlay_visible` (`SW_HIDE`/`SW_SHOWNOACTIVATE`) + `DWMWA_EXTENDED_FRAME_BOUNDS` + ambang taskbar `>= 20 px`, ikon vektor `paint_vector_icon`, `render_dot_label`, `render_centered_truncated_text`, tombol `Send Test Notification` unclipped + auto-unpause (`cargo test` 27 passed)
 - [x] **Responsivitas Tombol Linux, Pemisahan Logika OS & Ikon Vektor (`src/ui/icons.rs`):** Pemisahan penuh bridge overlay/hover/fokus/font Windows vs Linux di `src/platform/`, perbaikan `.with_resizable` Wayland + fast-path hover nol-IPC & cache/throttle Hyprland IPC + hitbox tombol nyaman (`CursorIcon::PointingHand`), ikon vektor `Painter` bebas tofu, serta penemuan font lintas distro Linux (`NotoSans`, `NotoSansMono`, `NotoSansSymbols`, `NotoSansCJK` multi-index `.ttc` + `fc-match`)
 - [x] **Menu Settings:** Secondary viewport untuk ukuran, warna, tema preset, corner radius, dan toggle modul (`src/ui/settings.rs`)
 - [x] **Todo List:** Checklist lokal dengan persistensi `todos.toml` (`src/todo.rs`)
@@ -49,7 +52,8 @@ Referensi cakupan fitur: [[PRD-LiebertDynamicIsland-MVP]].
 - [x] **Jam & Zona Waktu + Idle Display Mode:** Jam IANA (`chrono-tz`), format 12h/24h, detik, dan pilihan tampilan idle (`Auto`, `Clock`, `Lyrics`, `NextEvent`, `Minimal`) di `src/clock.rs` & `src/ui/`
 - [x] **Delayed Auto-Hide + Top-Edge Hover Reveal:** Auto-hide setelah *N* detik idle (`auto_hide_delay_secs`) dan muncul kembali saat kursor mengarah ke tepi atas tengah layar (Windows)
 - [x] **Fullscreen / Game Auto-Hide:** Sembunyikan pill otomatis saat aplikasi/game/video fullscreen aktif di monitor utama (Windows; toggle di Settings)
-- [ ] **Quick Timer / Pomodoro:** Countdown fokus langsung di pill idle yang terhubung dengan Todo List
+- [x] **Quick Timer / Pomodoro:** Countdown fokus langsung di pill idle, tab `⏱ Timer`, notifikasi selesai fase, & pengaturan durasi (`src/pomodoro.rs`)
+- [x] **Device Font Picker & Karaoke Translate Mode:** Pilihan font terinstal perangkat di Settings (`list_installed_fonts`, `apply_configured_fonts`), opsi `KaraokeLyricMode::Translate`, serta perbaikan windowed-fullscreen + timer `auto_hide_delay_secs` pasca-fullscreen
 - [ ] **Launch at Startup & Multi-Monitor Picker:** Toggle autostart OS dan pilihan monitor target di Settings
 - [ ] **System HUD (Volume & Brightness):** Bar indikator custom saat volume atau brightness berubah
 - [ ] **Click-to-Focus App:** Klik notifikasi untuk memfokuskan aplikasi pengirimnya

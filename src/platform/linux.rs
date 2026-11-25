@@ -885,6 +885,15 @@ fn load_art_from_url(url: &str) -> Option<AlbumArt> {
     None
 }
 
+pub fn list_installed_fonts() -> Vec<super::InstalledFont> {
+    let mut dirs = vec![
+        std::path::PathBuf::from("/usr/share/fonts"),
+        std::path::PathBuf::from("/usr/local/share/fonts"),
+    ];
+    if let Ok(home) = std::env::var("HOME") {
+        dirs.push(std::path::PathBuf::from(home).join(".local/share/fonts"));
+    }
+    super::collect_fonts_from_dirs(&dirs)
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -120,6 +120,7 @@ pub enum PlatformEvent {
     Removed(String),
     Status(ListenerStatus),
     Media(Option<MediaTrack>),
+    Fullscreen(bool),
     LyricsLoaded {
         artist: String,
         title: String,
@@ -197,6 +198,17 @@ pub fn spawn_media_listener(
     let _ = (tx, cmd_rx, on_wake);
 }
 
+pub fn spawn_fullscreen_watcher(
+    tx: mpsc::Sender<PlatformEvent>,
+    on_wake: Arc<dyn Fn() + Send + Sync>,
+) {
+    #[cfg(windows)]
+    windows::spawn_fullscreen_watcher(tx, on_wake);
+
+    #[cfg(not(windows))]
+    let _ = (tx, on_wake);
+}
+
 pub fn run_notification_spike() -> Result<String, String> {
     #[cfg(windows)]
     return windows::run_notification_spike();
@@ -263,6 +275,45 @@ pub fn apply_overlay_window_setup(window_title: &str) -> bool {
     }
 }
 
+pub fn position_overlay_window(
+    window_title: &str,
+    x_logical: f32,
+    y_logical: f32,
+    w_logical: f32,
+    h_logical: f32,
+) {
+    #[cfg(target_os = "linux")]
+    linux::position_overlay_window(window_title, x_logical, y_logical, w_logical, h_logical);
+
+    #[cfg(not(target_os = "linux"))]
+    let _ = (window_title, x_logical, y_logical, w_logical, h_logical);
+}
+
+pub fn set_overlay_visible(window_title: &str, visible: bool) -> bool {
+    #[cfg(windows)]
+    {
+        windows::set_overlay_visible(window_title, visible);
+        true
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = (window_title, visible);
+        false
+    }
+}
+
+pub fn set_overlay_click_through(window_title: &str, passthrough: bool) {
+    #[cfg(windows)]
+    windows::set_overlay_click_through(window_title, passthrough);
+
+    #[cfg(not(windows))]
+    let _ = (window_title, passthrough);
+}
+
+pub fn pin_window_top_y(window_title: &str, target_y_px: i32) {
+    #[cfg(windows)]
+    windows::pin_window_top_y(window_title, target_y_px);
 pub fn ensure_overlay_topmost(window_title: &str, force: bool) {
     #[cfg(target_os = "linux")]
     linux::ensure_overlay_topmost(window_title, force);
@@ -296,7 +347,24 @@ pub fn sync_overlay_window(
     let _ = (window_title, x_logical, y_logical, w_logical, h_logical, notch_dock_mode);
 }
 
-pub fn detect_overlay_hover(input: HoverPollInput<'_>) -> bool {
+pub fn is_cursor_in_screen_rect(
+    left_px: i32,
+    top_px: i32,
+    right_px: i32,
+    bottom_px: i32,
+) -> Option<bool> {
+    #[cfg(windows)]
+    return windows::is_cursor_in_screen_rect(left_px, top_px, right_px, bottom_px);
+
+    #[cfg(not(windows))]
+    {
+        let _ = (left_px, top_px, right_px, bottom_px);
+        None
+    }
+}
+
+#[allow(dead_code)] // Used as fallback on non-rect cursor checks.
+pub fn is_cursor_over_window(window_title: &str, padding_px: i32) -> Option<bool> {
     #[cfg(windows)]
     return windows::detect_overlay_hover(input);
 
@@ -323,6 +391,67 @@ pub fn bring_window_to_front(window_title: &str) -> bool {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstalledFont {
+    pub name: String,
+    pub path: String,
+}
+
+pub fn collect_fonts_from_dirs(dirs: &[std::path::PathBuf]) -> Vec<InstalledFont> {
+    let mut seen = std::collections::HashSet::new();
+    let mut fonts = Vec::new();
+    for dir in dirs {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                let sub = collect_fonts_from_dirs(&[path]);
+                for f in sub {
+                    if seen.insert(f.name.to_ascii_lowercase()) {
+                        fonts.push(f);
+                    }
+                }
+                continue;
+            }
+            let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+                continue;
+            };
+            if !matches!(ext.to_ascii_lowercase().as_str(), "ttf" | "otf" | "ttc") {
+                continue;
+            }
+            let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            let display = stem.replace(['_', '-'], " ").trim().to_owned();
+            if display.is_empty() {
+                continue;
+            }
+            if seen.insert(display.to_ascii_lowercase()) {
+                fonts.push(InstalledFont {
+                    name: display,
+                    path: path.to_string_lossy().into_owned(),
+                });
+            }
+        }
+    }
+    fonts.sort_by_key(|a| a.name.to_ascii_lowercase());
+    fonts
+}
+
+pub fn list_installed_fonts() -> Vec<InstalledFont> {
+    #[cfg(windows)]
+    return windows::list_installed_fonts();
+
+    #[cfg(target_os = "linux")]
+    return linux::list_installed_fonts();
+
+    #[cfg(not(any(windows, target_os = "linux")))]
+    Vec::new()
+}
+
+#[allow(dead_code)] // Polled asynchronously by Windows fullscreen watcher; retained for Linux compatibility.
 pub fn is_foreground_fullscreen() -> bool {
     #[cfg(windows)]
     return windows::is_foreground_fullscreen();
