@@ -656,13 +656,15 @@ impl eframe::App for IslandApp {
         let top_y = self.effective_top_offset();
         let trigger_w = self.config.idle_width.max(180.0) * self.config.scale;
         let pointer_busy = ctx.input(|i| i.pointer.any_down());
+        let ctx_hovered =
+            self.last_egui_hovered || ctx.input(|i| i.pointer.hover_pos().is_some());
         let is_animating_prev = (self.target_size() - self.current_size).length_sq() > 0.25;
         let hovered = if self.state.hide_in_fullscreen && self.state.fullscreen_active {
             false
         } else {
             platform::detect_overlay_hover(HoverPollInput {
                 window_title: WINDOW_TITLE,
-                ctx_hovered: self.last_egui_hovered,
+                ctx_hovered,
                 pointer_busy,
                 currently_hovered: self.state.hovered,
                 visible: self.last_visible,

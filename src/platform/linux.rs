@@ -257,12 +257,9 @@ pub fn detect_overlay_hover(input: HoverPollInput<'_>) -> bool {
         return result;
     }
 
-    // Fast path: trust native Wayland/X11 pointer events and active interactions with 0 IPC calls.
+    // Fast path: trust active pointer interactions and native Wayland/X11 pointer-inside events with 0 IPC calls.
     if input.pointer_busy || input.ctx_hovered {
         return true;
-    }
-    if !input.currently_hovered {
-        return false;
     }
 
     if hypr_socket_path().is_none() {
@@ -271,14 +268,21 @@ pub fn detect_overlay_hover(input: HoverPollInput<'_>) -> bool {
 
     if let Ok(guard) = overlay_cache().lock()
         && let Some((at, cached)) = guard.last_hover_probe
-        && at.elapsed() < Duration::from_millis(50)
+        && at.elapsed() < Duration::from_millis(33)
     {
         return cached;
     }
 
-    let pad = if input.animating { 24 } else { 8 };
+    let pad = if input.animating {
+        24
+    } else if input.currently_hovered {
+        8
+    } else {
+        2
+    };
     let over = is_cursor_over_window(input.window_title, pad).unwrap_or(false)
-        || (input.animating
+        || (input.currently_hovered
+            && input.animating
             && is_cursor_in_top_trigger(input.top_offset_px, input.trigger_width_px)
                 .unwrap_or(false));
     if let Ok(mut guard) = overlay_cache().lock() {
