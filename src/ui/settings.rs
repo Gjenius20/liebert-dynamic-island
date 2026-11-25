@@ -7,6 +7,7 @@ use crate::calendar::{CalendarCommand, CalendarEvent, format_countdown, format_l
 use crate::clock::{COMMON_TIMEZONES, format_clock, is_valid_timezone};
 use crate::config::{Config, IdleDisplayMode, KaraokeLyricMode};
 use crate::lyrics::TRANSLATE_LANGUAGES;
+use crate::platform::InstalledFont;
 use crate::todo::TodoStore;
 use crate::ui::icons::{IconKind, icon_button};
 
@@ -32,6 +33,8 @@ pub struct SettingsWindowState<'a> {
     pub calendar_cmd_tx: &'a mpsc::Sender<CalendarCommand>,
     pub config_dirty: &'a mut bool,
     pub test_notification_requested: &'a mut bool,
+    pub installed_fonts: &'a mut Vec<InstalledFont>,
+    pub font_search: &'a mut String,
 }
 
 pub fn render_settings_viewport(ctx: &egui::Context, st: SettingsWindowState<'_>) {
@@ -62,12 +65,42 @@ pub fn render_settings_viewport(ctx: &egui::Context, st: SettingsWindowState<'_>
                 *st.focus_requested = false;
             }
 
-            apply_settings_theme(ui);
+            apply_settings_theme(ui, st.config.accent_color);
             let panel_frame = egui::Frame::new()
                 .fill(Color32::from_rgb(19, 19, 23))
                 .inner_margin(egui::Margin::same(14));
 
             egui::CentralPanel::default().frame(panel_frame).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.selectable_value(st.tab, SettingsTab::Appearance, "Appearance");
+                    ui.selectable_value(st.tab, SettingsTab::Todo, "Todo List");
+                    ui.selectable_value(st.tab, SettingsTab::Calendar, "Google Calendar");
+                });
+                ui.add_space(4.0);
+                ui.separator();
+                ui.add_space(4.0);
+
+                egui::ScrollArea::vertical().show(ui, |ui| match *st.tab {
+                    SettingsTab::Appearance => render_appearance_tab(
+                        ui,
+                        st.config,
+                        st.config_dirty,
+                        st.test_notification_requested,
+                        st.installed_fonts,
+                        st.font_search,
+                    ),
+                    SettingsTab::Todo => {
+                        render_todo_tab(ui, st.todos, st.new_todo_input);
+                    }
+                    SettingsTab::Calendar => render_calendar_tab(
+                        ui,
+                        st.config,
+                        st.calendar_url_input,
+                        st.calendar_events,
+                        st.calendar_status,
+                        st.calendar_cmd_tx,
+                        st.config_dirty,
+                    ),
                 render_settings_tabs_body(ui, &mut SettingsBodyState {
                     tab: st.tab,
                     config: st.config,
@@ -252,9 +285,66 @@ fn render_appearance_tab(
     config: &mut Config,
     config_dirty: &mut bool,
     test_notification_requested: &mut bool,
+    installed_fonts: &mut Vec<InstalledFont>,
+    font_search: &mut String,
 ) {
+    if installed_fonts.is_empty() {
+        *installed_fonts = crate::platform::list_installed_fonts();
+    }
     let mut changed = false;
 
+    ui.label(RichText::new("Display Mode (Notch / Dynamic Island)").strong());
+    ui.horizontal(|ui| {
+        let btn_w = ((ui.available_width() - ui.spacing().item_spacing.x) * 0.5).max(140.0);
+        for (is_notch, label) in [
+            (true, "Top Notch (Seamless Top)"),
+            (false, "Floating Dynamic Island"),
+        ] {
+            let selected = config.notch_dock_mode == is_notch;
+            let [ar, ag, ab] = config.accent_color;
+            let fill = if selected {
+                Color32::from_rgba_unmultiplied(ar, ag, ab, 65)
+            } else {
+                Color32::from_rgb(32, 32, 38)
+            };
+            let stroke = if selected {
+                Stroke::new(1.5, Color32::from_rgb(ar, ag, ab))
+            } else {
+                Stroke::new(1.0, Color32::from_rgb(65, 65, 76))
+            };
+            let text_col = if selected {
+                Color32::WHITE
+            } else {
+                Color32::from_rgb(185, 185, 195)
+            };
+            let btn = egui::Button::new(RichText::new(label).color(text_col).strong())
+                .min_size(egui::vec2(btn_w, 30.0))
+                .fill(fill)
+                .stroke(stroke)
+                .corner_radius(CornerRadius::same(8));
+            if ui.add(btn).clicked() && !selected {
+                config.notch_dock_mode = is_notch;
+                changed = true;
+            }
+        }
+    });
+    ui.label(
+        RichText::new(if config.notch_dock_mode {
+            "Notch menempel di tepi atas monitor"
+        } else {
+            "Floating pill dengan jarak Top Offset"
+        })
+        .small()
+        .color(Color32::GRAY),
+    );
+    changed |= ui
+        .add_enabled(
+            !config.notch_dock_mode,
+            egui::Slider::new(&mut config.top_offset_px, 0.0..=60.0).text("Top Offset (px)"),
+        )
+        .changed();
+
+    ui.add_space(8.0);
     ui.label(RichText::new("Theme Presets").strong());
     ui.horizontal(|ui| {
         for (id, label) in [
@@ -282,21 +372,6 @@ fn render_appearance_tab(
     changed |= ui
         .add(egui::Slider::new(&mut config.expanded_width, 320.0..=520.0).text("Expanded Width (px)"))
         .changed();
-    ui.horizontal(|ui| {
-        ui.label("Display Mode:");
-        changed |= ui
-            .selectable_value(&mut config.notch_dock_mode, true, "Top Notch")
-            .changed();
-        changed |= ui
-            .selectable_value(&mut config.notch_dock_mode, false, "Floating Island")
-            .changed();
-    });
-    changed |= ui
-        .add_enabled(
-            !config.notch_dock_mode,
-            egui::Slider::new(&mut config.top_offset_px, 0.0..=60.0).text("Top Offset (px)"),
-        )
-        .changed();
     changed |= ui
         .add(egui::Slider::new(&mut config.corner_radius, 8..=28).text("Corner Radius"))
         .changed();
@@ -308,14 +383,11 @@ fn render_appearance_tab(
     ui.label(RichText::new("Colors").strong());
     ui.horizontal(|ui| {
         ui.label("Background:");
-        let mut bg = Color32::from_rgba_unmultiplied(
-            config.bg_color[0],
-            config.bg_color[1],
-            config.bg_color[2],
-            config.bg_color[3],
-        );
-        if ui.color_edit_button_srgba(&mut bg).changed() {
-            config.bg_color = bg.to_srgba_unmultiplied();
+        let mut bg_rgb = [config.bg_color[0], config.bg_color[1], config.bg_color[2]];
+        if ui.color_edit_button_srgb(&mut bg_rgb).changed() {
+            config.bg_color[0] = bg_rgb[0];
+            config.bg_color[1] = bg_rgb[1];
+            config.bg_color[2] = bg_rgb[2];
             changed = true;
         }
         ui.label("Accent:");
@@ -328,8 +400,56 @@ fn render_appearance_tab(
         }
     });
     changed |= ui
+        .add(egui::Slider::new(&mut config.bg_color[3], 60..=255).text("Background Opacity"))
+        .changed();
+    changed |= ui
         .add(egui::Slider::new(&mut config.border_alpha, 0..=160).text("Border Opacity"))
         .changed();
+    if config.show_lyrics && config.dynamic_album_color {
+        ui.label(
+            RichText::new("Note: Album art dynamic accent is active while music plays.")
+                .small()
+                .color(Color32::GRAY),
+        );
+    }
+
+    ui.add_space(8.0);
+    ui.label(RichText::new("Font (Installed on Device)").strong());
+    ui.horizontal(|ui| {
+        ui.add(
+            egui::TextEdit::singleline(font_search)
+                .hint_text("Filter fonts...")
+                .desired_width(130.0),
+        );
+        let selected_font = if config.font_name.is_empty() {
+            "System Default"
+        } else {
+            config.font_name.as_str()
+        };
+        let query = font_search.trim().to_ascii_lowercase();
+        egui::ComboBox::from_id_salt("device_font_selector")
+            .selected_text(selected_font)
+            .width(235.0)
+            .show_ui(ui, |ui| {
+                if ui
+                    .selectable_label(config.font_name.is_empty(), "System Default")
+                    .clicked()
+                    && !config.font_name.is_empty()
+                {
+                    config.font_name.clear();
+                    changed = true;
+                }
+                for f in installed_fonts.iter().filter(|f| {
+                    query.is_empty() || f.name.to_ascii_lowercase().contains(&query)
+                }) {
+                    let is_sel = config.font_name.eq_ignore_ascii_case(&f.name);
+                    if ui.selectable_label(is_sel, &f.name).clicked() && !is_sel {
+                        config.font_name = f.name.clone();
+                        changed = true;
+                    }
+                }
+            });
+    });
 
     ui.add_space(8.0);
     ui.label(RichText::new("Idle Display & Clock").strong());
@@ -341,6 +461,7 @@ fn render_appearance_tab(
                 IdleDisplayMode::Clock,
                 IdleDisplayMode::Lyrics,
                 IdleDisplayMode::NextEvent,
+                IdleDisplayMode::Pomodoro,
                 IdleDisplayMode::Minimal,
             ] {
                 if ui
@@ -439,15 +560,17 @@ fn render_appearance_tab(
         .changed();
     ui.horizontal(|ui| {
         changed |= ui
-            .checkbox(
-                &mut config.show_notifications,
-                "Show notification popups (WhatsApp, Discord, Browser, Gmail, ...)",
-            )
+            .checkbox(&mut config.show_notifications, "Show notification popups")
             .changed();
-        if ui.button("Test Popup").clicked() {
+        if ui.button("Send Test Notification").clicked() {
             *test_notification_requested = true;
         }
     });
+    ui.label(
+        RichText::new("Supports WhatsApp, Discord, Browser, Gmail, and Windows toasts")
+            .small()
+            .color(Color32::GRAY),
+    );
     changed |= ui
         .checkbox(&mut config.show_lyrics, "Show Music & Synced Lyrics")
         .changed();
@@ -474,7 +597,11 @@ fn render_appearance_tab(
                     egui::ComboBox::from_id_salt("karaoke_lyric_mode")
                         .selected_text(config.karaoke_lyric_mode.label())
                         .show_ui(ui, |ui| {
-                            for mode in [KaraokeLyricMode::Original, KaraokeLyricMode::Romaji] {
+                            for mode in [
+                                KaraokeLyricMode::Original,
+                                KaraokeLyricMode::Romaji,
+                                KaraokeLyricMode::Translate,
+                            ] {
                                 if ui
                                     .selectable_value(
                                         &mut config.karaoke_lyric_mode,
@@ -543,6 +670,28 @@ fn render_appearance_tab(
     changed |= ui
         .checkbox(&mut config.show_calendar, "Show Google Calendar tab")
         .changed();
+    changed |= ui
+        .checkbox(&mut config.show_pomodoro, "Show Pomodoro Timer tab")
+        .changed();
+    if config.show_pomodoro {
+        ui.indent("pomodoro_sub_opts", |ui| {
+            changed |= ui
+                .add(egui::Slider::new(&mut config.pomodoro_focus_mins, 1..=120).text("Focus (min)"))
+                .changed();
+            changed |= ui
+                .add(
+                    egui::Slider::new(&mut config.pomodoro_short_break_mins, 1..=60)
+                        .text("Short Break (min)"),
+                )
+                .changed();
+            changed |= ui
+                .add(
+                    egui::Slider::new(&mut config.pomodoro_long_break_mins, 1..=90)
+                        .text("Long Break (min)"),
+                )
+                .changed();
+        });
+    }
 
     if ui.button("Reset to Defaults").clicked() {
         let keep_url = config.google_calendar_ics_url.clone();
@@ -627,7 +776,7 @@ fn render_todo_tab(ui: &mut egui::Ui, todos: &mut TodoStore, new_todo_input: &mu
     dirty
 }
 
-fn apply_settings_theme(ui: &mut egui::Ui) {
+fn apply_settings_theme(ui: &mut egui::Ui, accent: [u8; 3]) {
     let style = ui.style_mut();
     style.visuals = egui::Visuals::dark();
     style.visuals.panel_fill = Color32::from_rgb(19, 19, 23);
@@ -639,8 +788,9 @@ fn apply_settings_theme(ui: &mut egui::Ui) {
     style.visuals.widgets.hovered.weak_bg_fill = Color32::from_rgb(46, 46, 56);
     style.visuals.widgets.hovered.corner_radius = CornerRadius::same(7);
     style.visuals.widgets.active.corner_radius = CornerRadius::same(7);
-    style.visuals.selection.bg_fill = Color32::from_rgba_unmultiplied(224, 92, 98, 175);
-    style.visuals.selection.stroke = Stroke::new(1.0, Color32::from_rgb(224, 92, 98));
+    style.visuals.selection.bg_fill =
+        Color32::from_rgba_unmultiplied(accent[0], accent[1], accent[2], 175);
+    style.visuals.selection.stroke = Stroke::new(1.0, Color32::from_rgb(accent[0], accent[1], accent[2]));
     style.spacing.item_spacing = egui::vec2(8.0, 6.0);
 }
 

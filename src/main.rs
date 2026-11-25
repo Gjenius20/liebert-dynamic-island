@@ -5,6 +5,7 @@ mod clock;
 mod config;
 mod lyrics;
 mod platform;
+mod pomodoro;
 mod state;
 mod todo;
 mod tray;
@@ -52,7 +53,7 @@ fn main() -> ExitCode {
 
     let demo_mode = args.iter().any(|a| a == "--demo");
     let config = Config::load();
-    let tray = match TrayController::new(config.auto_hide_when_idle, config.notch_dock_mode) {
+    let tray = match TrayController::new(config.auto_hide_when_idle) {
         Ok(t) => Some(t),
         Err(err) => {
             eprintln!("Warning: tray unavailable ({err})");
@@ -60,6 +61,13 @@ fn main() -> ExitCode {
         }
     };
 
+    let (event_tx, event_rx) = mpsc::channel();
+    let (lyrics_req_tx, lyrics_req_rx) = mpsc::channel();
+    let (media_cmd_tx, media_cmd_rx) = mpsc::channel();
+    let (calendar_cmd_tx, calendar_cmd_rx) = mpsc::channel();
+
+    let canvas = ui::permanent_canvas_size(&config);
+    let initial_x = ((platform::primary_monitor_logical_width() - canvas.x) * 0.5).max(0.0);
     let ear_w = if config.notch_dock_mode {
         (12.0 * config.scale).round() * 2.0
     } else {
@@ -143,8 +151,8 @@ fn run_eframe_overlay(
             .with_minimize_button(false)
             .with_maximize_button(false)
             .with_close_button(false)
-            .with_inner_size([initial_w, initial_h])
-            .with_position([initial_x, initial_y]),
+            .with_inner_size([canvas.x, canvas.y])
+            .with_position([initial_x, 0.0]),
         ..Default::default()
     };
 
@@ -152,12 +160,13 @@ fn run_eframe_overlay(
         WINDOW_TITLE,
         options,
         Box::new(move |cc| {
-            ui::install_base_fallback_fonts(&cc.egui_ctx);
+            ui::apply_configured_fonts(&cc.egui_ctx, &config.font_name);
             let egui_ctx = cc.egui_ctx.clone();
             let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || egui_ctx.request_repaint());
 
             platform::spawn_listener(event_tx.clone(), wake.clone());
             platform::spawn_media_listener(event_tx.clone(), media_cmd_rx, wake.clone());
+            platform::spawn_fullscreen_watcher(event_tx.clone(), wake.clone());
             lyrics::spawn_lyrics_worker(lyrics_req_rx, event_tx.clone(), wake.clone());
             calendar::spawn_calendar_worker(
                 config.google_calendar_ics_url.clone(),
