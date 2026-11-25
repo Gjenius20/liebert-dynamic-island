@@ -54,6 +54,8 @@ fn main() -> ExitCode {
     let initial_h = 30.0 * config.scale;
     let initial_x = ((platform::primary_monitor_logical_width() - initial_w) * 0.5).max(0.0);
 
+    platform::prepare_overlay_rules(WINDOW_TITLE, config.top_offset_px);
+
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Glow,
         viewport: egui::ViewportBuilder::default()
@@ -63,7 +65,7 @@ fn main() -> ExitCode {
             .with_always_on_top()
             .with_taskbar(false)
             .with_active(false)
-            .with_resizable(false)
+            .with_resizable(cfg!(target_os = "linux"))
             .with_inner_size([initial_w, initial_h])
             .with_position([initial_x, config.top_offset_px]),
         ..Default::default()

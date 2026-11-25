@@ -1,22 +1,191 @@
 use std::collections::HashMap;
 use std::future::pending;
+use std::io::{Read, Write};
+use std::os::unix::net::UnixStream;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use zbus::zvariant::{OwnedValue, Value};
-use zbus::{Connection, Proxy, connection, interface};
+use zbus::{Connection, Dict, OwnedVariant, Proxy, Variant, connection, interface};
 
 use crate::platform::{
     AlbumArt, MediaCommand, MediaTrack, PlatformEvent, RepeatMode, decode_album_art,
 };
 use crate::state::{ListenerStatus, NotificationItem};
 
-// shortcut: Wayland wlr-layer-shell positioning unsupported in winit/eframe, upgrade to smithay-client-toolkit or iced_layershell when targeting native Wayland positioning.
+// shortcut: Non-Hyprland Wayland compositors lack wlr-layer-shell positioning in winit/eframe; upgrade to smithay-client-toolkit or iced_layershell for compositor-agnostic layer surfaces.
+
+fn hypr_socket_path() -> Option<PathBuf> {
+    let sig = std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE")?;
+    let runtime = std::env::var_os("XDG_RUNTIME_DIR")?;
+    let mut path = PathBuf::from(runtime);
+    path.push("hypr");
+    path.push(sig);
+    path.push(".socket.sock");
+    path.exists().then_some(path)
+}
+
+fn hypr_ipc(cmd: &str) -> Option<String> {
+    let sock_path = hypr_socket_path()?;
+    let mut stream = UnixStream::connect(sock_path).ok()?;
+    let timeout = Some(Duration::from_millis(50));
+    let _ = stream.set_read_timeout(timeout);
+    let _ = stream.set_write_timeout(timeout);
+    stream.write_all(cmd.as_bytes()).ok()?;
+    let mut out = String::new();
+    stream.read_to_string(&mut out).ok()?;
+    Some(out)
+}
+
+fn hypr_eval_or_fallback(lua: &str, legacy_cmd: &str) {
+    if let Some(resp) = hypr_ipc(&format!("eval {lua}"))
+        && resp.trim() == "ok"
+    {
+        return;
+    }
+    let _ = hypr_ipc(legacy_cmd);
+}
+
+fn escape_lua_str(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn hypr_focused_monitor() -> Option<(f32, f32, f32, f32)> {
+    let raw = hypr_ipc("j/monitors")?;
+    let list: Vec<serde_json::Value> = serde_json::from_str(&raw).ok()?;
+    let mon = list
+        .iter()
+        .find(|m| m.get("focused").and_then(|v| v.as_bool()) == Some(true))
+        .or_else(|| list.first())?;
+    let x = mon.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+    let y = mon.get("y").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+    let width = mon.get("width").and_then(|v| v.as_f64()).unwrap_or(1920.0) as f32;
+    let scale = mon.get("scale").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
+    Some((x, y, width, scale.max(0.5)))
+}
+
+fn hypr_cursor_pos() -> Option<(f32, f32)> {
+    let raw = hypr_ipc("cursorpos")?;
+    let (xs, ys) = raw.trim().split_once(',')?;
+    let x = xs.trim().parse::<f32>().ok()?;
+    let y = ys.trim().parse::<f32>().ok()?;
+    Some((x, y))
+}
+
+pub fn primary_monitor_logical_width() -> f32 {
+    if let Some((_, _, width, _)) = hypr_focused_monitor() {
+        return width;
+    }
+    1920.0
+}
+
+pub fn prepare_overlay_rules(window_title: &str, top_offset_px: f32) {
+    if hypr_socket_path().is_none() {
+        return;
+    }
+    let y = top_offset_px.round() as i32;
+    let escaped = escape_lua_str(window_title);
+    let lua = format!(
+        "hl.window_rule({{match={{title=\"^{escaped}$\"}}, float=true, pin=true, no_initial_focus=true, no_blur=true, no_shadow=true, border_size=0, no_anim=true, move={{\"(monitor_w*0.5-window_w*0.5)\", \"{y}\"}}}})"
+    );
+    let legacy = format!(
+        "[[BATCH]]keyword windowrulev2 float,title:^({window_title})$ ; keyword windowrulev2 pin,title:^({window_title})$ ; keyword windowrulev2 noinitialfocus,title:^({window_title})$ ; keyword windowrulev2 noborder,title:^({window_title})$ ; keyword windowrulev2 noshadow,title:^({window_title})$ ; keyword windowrulev2 noblur,title:^({window_title})$ ; keyword windowrulev2 noanim,title:^({window_title})$ ; keyword windowrulev2 move (monitor_w*0.5-window_w*0.5) {y},title:^({window_title})$"
+    );
+    hypr_eval_or_fallback(&lua, &legacy);
+}
+
+pub fn apply_no_activate_hook(window_title: &str) {
+    if hypr_socket_path().is_none() {
+        return;
+    }
+    let escaped = escape_lua_str(window_title);
+    let lua = format!(
+        "hl.dispatch(hl.dsp.window.float(\"title:^{escaped}$\")); hl.dispatch(hl.dsp.window.pin(\"title:^{escaped}$\"))"
+    );
+    let legacy = format!(
+        "[[BATCH]]dispatch setfloating title:^({window_title})$ ; dispatch pin title:^({window_title})$"
+    );
+    hypr_eval_or_fallback(&lua, &legacy);
+}
+
+pub fn position_overlay_window(
+    window_title: &str,
+    x_logical: f32,
+    y_logical: f32,
+    w_logical: f32,
+    h_logical: f32,
+) {
+    if hypr_socket_path().is_none() {
+        return;
+    }
+    let (mon_x, mon_y) = hypr_focused_monitor()
+        .map(|(x, y, _, _)| (x, y))
+        .unwrap_or((0.0, 0.0));
+    let tx = (mon_x + x_logical).round() as i32;
+    let ty = (mon_y + y_logical).round() as i32;
+    let tw = w_logical.round().max(1.0) as i32;
+    let th = h_logical.round().max(1.0) as i32;
+    let escaped = escape_lua_str(window_title);
+    let lua = format!(
+        "hl.dispatch(hl.dsp.window.resize({{x={tw}, y={th}, exact=true, window=\"title:^{escaped}$\"}})); hl.dispatch(hl.dsp.window.move({{x={tx}, y={ty}, exact=true, window=\"title:^{escaped}$\"}}))"
+    );
+    let legacy = format!(
+        "[[BATCH]]dispatch resizewindowpixel exact {tw} {th},title:^({window_title})$ ; dispatch movewindowpixel exact {tx} {ty},title:^({window_title})$"
+    );
+    hypr_eval_or_fallback(&lua, &legacy);
+}
+
+pub fn is_cursor_over_window(window_title: &str, padding_px: i32) -> Option<bool> {
+    hypr_socket_path()?;
+    let (cx, cy) = hypr_cursor_pos()?;
+    let (_, mon_y, _, _) = hypr_focused_monitor().unwrap_or((0.0, 0.0, 1920.0, 1.0));
+    if cy > mon_y + 480.0 {
+        return Some(false);
+    }
+    let raw = hypr_ipc("j/clients")?;
+    let clients: Vec<serde_json::Value> = serde_json::from_str(&raw).ok()?;
+    let client = clients.iter().find(|c| {
+        c.get("title").and_then(|v| v.as_str()) == Some(window_title)
+            && c.get("mapped").and_then(|v| v.as_bool()) == Some(true)
+            && c.get("hidden").and_then(|v| v.as_bool()) != Some(true)
+    })?;
+    let at = client.get("at")?.as_array()?;
+    let size = client.get("size")?.as_array()?;
+    let x = at.first()?.as_f64()? as f32;
+    let y = at.get(1)?.as_f64()? as f32;
+    let w = size.first()?.as_f64()? as f32;
+    let h = size.get(1)?.as_f64()? as f32;
+    let pad = padding_px as f32;
+    Some(cx >= x - pad && cx <= x + w + pad && cy >= y - pad && cy <= y + h + pad)
+}
+
+pub fn is_cursor_in_top_trigger(
+    top_offset_px: f32,
+    trigger_width_px: f32,
+    _pixels_per_point: f32,
+) -> Option<bool> {
+    hypr_socket_path()?;
+    let (cx, cy) = hypr_cursor_pos()?;
+    let (mon_x, mon_y, width, scale) = hypr_focused_monitor()?;
+    let logical_w = width / scale;
+    let center_x = mon_x + logical_w * 0.5;
+    let half_w = trigger_width_px.max(120.0) * 0.5;
+    let trigger_bottom = mon_y + top_offset_px.max(0.0) + 12.0;
+    Some(cx >= center_x - half_w && cx <= center_x + half_w && cy >= mon_y && cy <= trigger_bottom)
+}
 
 pub fn is_foreground_fullscreen() -> bool {
-    // shortcut: Linux fullscreen detection unimplemented (needs X11 _NET_WM_STATE_FULLSCREEN or compositor IPC), upgrade when targeting Linux runtime.
-    false
+    let Some(raw) = hypr_ipc("j/activewindow") else {
+        return false;
+    };
+    let Ok(win) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return false;
+    };
+    if win.get("title").and_then(|v| v.as_str()) == Some(crate::ui::WINDOW_TITLE) {
+        return false;
+    }
+    win.get("fullscreen").and_then(|v| v.as_i64()).unwrap_or(0) != 0
 }
 
 struct NotificationServer {
@@ -36,7 +205,7 @@ impl NotificationServer {
         summary: &str,
         body: &str,
         _actions: Vec<&str>,
-        _hints: HashMap<&str, OwnedValue>,
+        _hints: HashMap<&str, zbus::OwnedVariant>,
         _expire_timeout: i32,
     ) -> u32 {
         let id = if replaces_id != 0 {
@@ -115,15 +284,17 @@ pub fn spawn_listener(tx: mpsc::Sender<PlatformEvent>, on_wake: Arc<dyn Fn() + S
                 on_wake: on_wake.clone(),
             };
 
+            let async_tx = tx.clone();
+            let async_on_wake = on_wake.clone();
             let res = zbus::block_on(async move {
-                let _conn = connection::Builder::session()?
-                    .name("org.freedesktop.Notifications")?
-                    .serve_at("/org/freedesktop/Notifications", server)?
+                let _conn = connection::Builder::session()
+                    .name("org.freedesktop.Notifications")
+                    .serve_at("/org/freedesktop/Notifications", server)
                     .build()
                     .await?;
 
-                let _ = tx.send(PlatformEvent::Status(ListenerStatus::Listening));
-                on_wake();
+                let _ = async_tx.send(PlatformEvent::Status(ListenerStatus::Listening));
+                async_on_wake();
                 pending::<()>().await;
                 Ok::<(), zbus::Error>(())
             });
@@ -226,7 +397,7 @@ pub fn spawn_media_listener(
                                                     &(
                                                         "org.mpris.MediaPlayer2.Player",
                                                         "Shuffle",
-                                                        Value::Bool(shuffle),
+                                                        Variant::Bool(shuffle),
                                                     ),
                                                 )
                                                 .await;
@@ -252,7 +423,7 @@ pub fn spawn_media_listener(
                                                     &(
                                                         "org.mpris.MediaPlayer2.Player",
                                                         "LoopStatus",
-                                                        Value::from(loop_str),
+                                                        Variant::from(loop_str),
                                                     ),
                                                 )
                                                 .await;
@@ -300,7 +471,7 @@ async fn read_mpris_track(
     )
     .await
     .ok()?;
-    let all: HashMap<String, OwnedValue> = props
+    let all: HashMap<String, OwnedVariant> = props
         .call("GetAll", &("org.mpris.MediaPlayer2.Player",))
         .await
         .ok()?;
@@ -331,31 +502,29 @@ async fn read_mpris_track(
         .unwrap_or(0);
 
     let meta_val = all.get("Metadata")?;
-    let dict = zbus::zvariant::Dict::try_from(meta_val.downcast_ref::<Value>().ok()?).ok()?;
+    let dict = Dict::try_from(meta_val.downcast_ref::<Variant>().ok()?).ok()?;
 
     let title = dict
-        .get::<&str, Value>(&"xesam:title")
+        .get::<&str, &str>(&"xesam:title")
         .ok()
         .flatten()
-        .and_then(|v| <&str>::try_from(v).ok())
         .map(|s| s.trim().to_owned())?;
     if title.is_empty() {
         return None;
     }
 
     let artist = dict
-        .get::<&str, Value>(&"xesam:artist")
+        .get::<&str, Variant>(&"xesam:artist")
         .ok()
         .flatten()
-        .and_then(|v| Vec::<String>::try_from(v.clone()).ok())
+        .and_then(|v| Vec::<String>::try_from(v).ok())
         .map(|list| list.join(", "))
         .unwrap_or_default();
 
     let duration_ms = dict
-        .get::<&str, Value>(&"mpris:length")
+        .get::<&str, i64>(&"mpris:length")
         .ok()
         .flatten()
-        .and_then(|v| i64::try_from(v).ok())
         .map(|us| (us / 1000).max(0) as u64)
         .unwrap_or(0);
 
@@ -366,10 +535,9 @@ async fn read_mpris_track(
         art.clone()
     } else {
         let art_url = dict
-            .get::<&str, Value>(&"mpris:artUrl")
+            .get::<&str, &str>(&"mpris:artUrl")
             .ok()
-            .flatten()
-            .and_then(|v| <&str>::try_from(v).ok());
+            .flatten();
         let art = art_url.and_then(load_art_from_url);
         *cached_art = Some((key, art.clone()));
         art

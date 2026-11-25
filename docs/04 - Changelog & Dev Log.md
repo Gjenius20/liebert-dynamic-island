@@ -9,6 +9,19 @@ tags:
 # 04 - Changelog & Dev Log
 
 ## 2026-11-25
+### Fixed
+- `Cargo.toml`, `Cargo.lock`: Mengganti `tray-icon` ke `default-features = false, features = ["ksni"]` untuk mengatasi panic startup di Linux/Hyprland (`GTK has not been initialized. Call gtk::init first`) sekaligus menghilangkan ketergantungan runtime GTK3/libappindicator. Lihat [[03 - Catatan Rapat & Keputusan]].
+- `src/main.rs`, `src/platform/mod.rs`, `src/platform/linux.rs`, `src/ui/mod.rs`: Menambahkan integrasi Hyprland UNIX IPC socket (`.socket.sock`, mendukung `eval` Lua Hyprland `>= 0.57` dan fallback `keyword`/`dispatch` klasik) untuk `prepare_overlay_rules` (`float`, `pin`, `no_initial_focus`, `no_blur`, `no_shadow`, `border_size=0`, `no_anim`, `move`), sinkronisasi `resize` + `move` via `position_overlay_window`, deteksi fullscreen (`j/activewindow`), serta pelacakan kursor (`is_cursor_over_window`, `is_cursor_in_top_trigger`); sekaligus mengaktifkan `.with_resizable(cfg!(target_os = "linux"))` agar `xdg_toplevel` Wayland tidak mengunci ukuran awal `140×30`. Terverifikasi live di Hyprland 0.57.2 (`Idle [890, 10] 140×30` → `Compact [790, 10] 340×58`, `floating: true`, `pinned: true`, tanpa mencuri fokus). Lihat [[01 - Arsitektur & Spesifikasi]] dan [[03 - Catatan Rapat & Keputusan]].
+- `src/platform/linux.rs`: Menyesuaikan listener notifikasi, kontrol MPRIS2 (`Shuffle`/`LoopStatus` memakai `zbus::Variant`), pembacaan `mpris:artUrl` (`dict.get::<&str, &str>`), dan pembaca MPRIS2 (`read_mpris_track`) dengan API `zbus 6.5` (`Builder::session()`, `name()`, dan `serve_at()` mengembalikan `Self`, bukan `Result`; mengganti `OwnedValue`, `Value`, dan `zvariant::Dict` dengan `OwnedVariant`, `Variant`, dan `Dict`). `cargo test` (23 tests), `cargo clippy --all-targets -- -D warnings`, dan `cargo build --release` lolos di Linux. Lihat [[01 - Arsitektur & Spesifikasi]] dan [[03 - Catatan Rapat & Keputusan]].
+- `src/state.rs`: `ListenerStatus::AccessDenied` ditandai `allow(dead_code)` di luar Windows agar `cargo clippy --all-targets -- -D warnings` bersih (varian hanya diproduksi backend WinRT; kegagalan D-Bus Linux dipetakan ke `Error`). Lihat [[01 - Arsitektur & Spesifikasi]].
+
+### Changed
+- `.gitignore`: Menambahkan `dist/` dan `*.AppImage` untuk output kemasan AppImage Linux.
+- `docs/00 - Dashboard Proyek.md`, `docs/01 - Arsitektur & Spesifikasi.md`, `docs/02 - Daftar Tugas & Backlog.md`, `docs/03 - Catatan Rapat & Keputusan.md`: Menyelesaikan konflik merge dengan `origin/main` (`ad1cd2d`), mencatat integrasi `image 0.25` + MPRIS2 Shuffle/Loop/Seek/`mpris:artUrl` dan verifikasi build Linux (`zbus 6.5` + `rustc 1.98.1`), serta mempertahankan `ADR-004`–`ADR-007`. Lihat [[04 - Changelog & Dev Log]].
+
+### Added
+- `dist/Liebert_Dynamic_Island-0.1.0-x86_64.AppImage` (gitignored): Memaketkan binary release Linux (`x86_64`) menjadi AppImage menggunakan `appimagetool` + `type2-runtime` beserta `.desktop` entry tervalidasi dan ikon `.DirIcon`.
+
 ### Added
 - `src/platform/mod.rs`, `src/platform/windows.rs`, `src/platform/linux.rs`: Menambahkan ekstraksi cover album (`Storage_Streams::DataReader` pada WinRT SMTC & `mpris:artUrl` pada MPRIS2 Linux, cache per lagu, decode `image 0.25`) serta `extract_dominant_accent()` untuk mengekstrak warna aksen dominan album.
 - `src/ui/mod.rs`, `src/ui/settings.rs`, `src/config.rs`: Mendesain ulang Music & Lyrics card mengikuti referensi visual 2-kolom (cover album membulat + title/artist + playbar + transport di kiri, multi-line wrapped `LayoutJob` karaoke original & romaji + terjemahan + upcoming preview redup di kanan, gradient wash atmosferik di bagian bawah, tombol pill `Translate` & `Romaji` di bawah, opsi `dynamic_album_color`, serta preset `"Crimson"`).

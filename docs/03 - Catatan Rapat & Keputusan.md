@@ -29,13 +29,13 @@ Log *Architecture Decision Records (ADR)* untuk proyek [[00 - Dashboard Proyek]]
 
 ## ADR-003: Hasil Spike Fase 1 — Renderer `eframe 0.37` (Glow) & WinRT Unpackaged
 - **Tanggal:** 2026-11-25
-- **Status:** Partially Accepted *(Renderer & Windows Accepted; Linux Spike Pending)*
+- **Status:** Partially Accepted *(Renderer, Windows, dan build/spike D-Bus Linux diterima; verifikasi overlay Wayland/X11 masih pending)*
 - **Konteks:** [[PRD-LiebertDynamicIsland-MVP]] dan [[01 - Arsitektur & Spesifikasi]] memerlukan keputusan pada 3 spike Fase 1 sebelum mengunci implementasi penuh:
   1. **Renderer Rust:** `eframe 0.37` dengan `Renderer::Glow` dipilih untuk MVP karena mendukung transparent borderless viewport, `WindowLevel::AlwaysOnTop`, event-driven `request_repaint_after`, serta waktu build dan kompleksitas minimal dalam target 1–2 minggu.
   2. **Windows WinRT `UserNotificationListener`:** Hasil eksekusi `cargo run -- --spike-notifications` di Windows host menunjukkan `SPIKE OK: Access: Allowed | Active toasts: 21` langsung dari `.exe` unpackaged (tanpa Sparse Package/MSIX).
-  3. **Linux D-Bus & Wayland Positioning:** Implementasi `zbus` (`org.freedesktop.Notifications`) telah disiapkan di `src/platform/linux.rs`, namun belum dikompilasi/diuji di host Linux. Positioning `wlr-layer-shell` pada Wayland belum didukung oleh `eframe`/`winit` dan dicatat sebagai limitasi sementara.
-- **Keputusan:** Mengunci `eframe 0.37` (`Glow`) dan jalur WinRT unpackaged untuk Windows; memvalidasi build & perilaku Linux pada sesi pengujian Linux berikutnya.
-- **Konsekuensi:** MVP Windows dapat langsung diuji harian. Untuk target Wayland native positioning di masa depan, layer windowing Linux perlu ditingkatkan ke `smithay-client-toolkit` atau `iced_layershell` jika posisi top-center `winit` tidak memadai pada compositor tertentu.
+  3. **Linux D-Bus & Wayland Positioning:** `src/platform/linux.rs` kini lolos build release dengan `zbus 6.5` (API builder `session()/name()/serve_at()` mengembalikan `Self`, error baru muncul di `build().await`; `OwnedVariant` menggantikan `OwnedValue`). `cargo run --release -- --spike-notifications` melaporkan sesi D-Bus OK, namun `org.freedesktop.Notifications` saat ini dipegang daemon lain, sehingga klaim nama/listener runtime belum terverifikasi. Positioning `wlr-layer-shell` pada Wayland belum didukung oleh `eframe`/`winit` dan dicatat sebagai limitasi sementara.
+- **Keputusan:** Mengunci `eframe 0.37` (`Glow`) dan jalur WinRT unpackaged untuk Windows; build & spike D-Bus Linux divalidasi di host Linux, uji runtime/overlay menyusul.
+- **Konsekuensi:** MVP Windows dapat langsung diuji harian dan binary Linux (`target/release/liebert-dynamic-island`) dapat dibangun. Untuk uji notifikasi Linux, daemon incumbent (mis. dunst/mako) harus dihentikan agar aplikasi dapat mengklaim `org.freedesktop.Notifications`. Untuk target Wayland native positioning di masa depan, layer windowing Linux perlu ditingkatkan ke `smithay-client-toolkit` atau `iced_layershell` jika posisi top-center `winit` tidak memadai pada compositor tertentu.
 
 ## ADR-004: Arsitektur Lyrics, Settings Viewport, Todo, Google Calendar `.ics`, & Perbaikan Hover
 - **Tanggal:** 2026-11-25
@@ -77,3 +77,13 @@ Log *Architecture Decision Records (ADR)* untuk proyek [[00 - Dashboard Proyek]]
   2. **Gradient Wash:** `ensure_gradient_texture` menghasilkan tekstur `1×64` yang di-cache dan dirender lewat `RectShape::filled(...).with_texture(...)` dengan corner radius card.
   3. **Wrapped Multi-Line Karaoke:** `render_wrapped_karaoke` menggunakan `egui::text::LayoutJob` dengan segment warna lit/dim per karakter agar karaoke tetap rapi meski baris panjang mengalami word-wrap.
 - **Konsekuensi:** Ukuran expanded card saat di tab Musik melebar ke `436×308` (dikalikan `scale`), dan pengguna tetap bisa menonaktifkan `dynamic_album_color` atau memilih preset `"Crimson"` di Settings.
+
+## ADR-008: Migrasi Tray Linux ke `ksni` & Integrasi Hyprland IPC
+- **Tanggal:** 2026-11-25
+- **Status:** Accepted
+- **Konteks:** Pada Linux Hyprland (CachyOS), aplikasi gagal berjalan saat startup karena `tray-icon 0.27` default memakai backend `libappindicator`/GTK3 yang panik (`GTK has not been initialized`) sebelum `eframe`/`winit` berjalan. Selain itu, Wayland mengabaikan `OuterPosition` serta mengunci ukuran saat `with_resizable(false)`, sehingga pill terjebak di tengah layar dan tidak membesar.
+- **Keputusan:**
+  1. Mengubah dependensi `tray-icon` menjadi `default-features = false, features = ["ksni"]` agar tray Linux berjalan lewat D-Bus `StatusNotifierItem` murni tanpa GTK (backend Windows/macOS tetap native).
+  2. Menambahkan bridge UNIX IPC socket Hyprland (`$XDG_RUNTIME_DIR/hypr/$HYPRLAND_INSTANCE_SIGNATURE/.socket.sock`) di `src/platform/linux.rs` untuk mendaftarkan `window_rule` (`float`, `pin`, `no_initial_focus`, `no_blur`, `no_shadow`, `border_size=0`, `no_anim`, `move`), menyinkronkan `resize` + `move` saat ukuran pill berubah, membaca resolusi monitor/posisi kursor (`is_cursor_over_window`, `is_cursor_in_top_trigger`), dan mendeteksi fullscreen (`j/activewindow`).
+  3. Mengaktifkan `.with_resizable(cfg!(target_os = "linux"))` di `src/main.rs` agar Wayland `xdg_toplevel` tidak mengunci `min_size == max_size`.
+- **Konsekuensi:** Aplikasi dan AppImage berjalan tanpa panic GTK di Hyprland serta otomatis berada di top-center dan responsif berubah ukuran; compositor Wayland non-Hyprland tetap menunggu implementasi `wlr-layer-shell`.
