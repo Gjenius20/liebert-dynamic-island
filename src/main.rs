@@ -36,6 +36,21 @@ fn main() -> ExitCode {
         }
     }
 
+    #[cfg(target_os = "linux")]
+    if args.iter().any(|a| a == "--settings") {
+        let ipc_sock = args
+            .windows(2)
+            .find(|w| w[0] == "--ipc-sock")
+            .map(|w| std::path::PathBuf::from(&w[1]));
+        return match ui::run_standalone_settings(ipc_sock) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("Settings UI error: {err}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+
     let demo_mode = args.iter().any(|a| a == "--demo");
     let config = Config::load();
     let tray = match TrayController::new(config.auto_hide_when_idle) {
@@ -53,19 +68,86 @@ fn main() -> ExitCode {
 
     let canvas = ui::permanent_canvas_size(&config);
     let initial_x = ((platform::primary_monitor_logical_width() - canvas.x) * 0.5).max(0.0);
+    let ear_w = if config.notch_dock_mode {
+        (12.0 * config.scale).round() * 2.0
+    } else {
+        0.0
+    };
+    let initial_w = config.idle_width * config.scale + ear_w;
+    let initial_h = 30.0 * config.scale;
+    let initial_x = ((platform::primary_monitor_logical_width(1.0) - initial_w) * 0.5).max(0.0);
+    let initial_y = if config.notch_dock_mode {
+        0.0
+    } else {
+        config.top_offset_px
+    };
 
-    platform::prepare_overlay_rules(WINDOW_TITLE, config.top_offset_px);
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+        match platform::wayland_layer::try_run_layer_shell(
+            config.clone(),
+            tray,
+            demo_mode,
+            initial_w,
+            initial_h,
+            initial_y,
+        ) {
+            Ok(()) => return ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("Warning: Wayland wlr-layer-shell unavailable ({err}), falling back to eframe");
+                let fallback_tray =
+                    TrayController::new(config.auto_hide_when_idle, config.notch_dock_mode).ok();
+                return run_eframe_overlay(
+                    config,
+                    fallback_tray,
+                    demo_mode,
+                    initial_w,
+                    initial_h,
+                    initial_x,
+                    initial_y,
+                );
+            }
+        }
+    }
+
+    run_eframe_overlay(
+        config,
+        tray,
+        demo_mode,
+        initial_w,
+        initial_h,
+        initial_x,
+        initial_y,
+    )
+}
+
+fn run_eframe_overlay(
+    config: Config,
+    tray: Option<TrayController>,
+    demo_mode: bool,
+    initial_w: f32,
+    initial_h: f32,
+    initial_x: f32,
+    initial_y: f32,
+) -> ExitCode {
+    let (event_tx, event_rx) = mpsc::channel();
+    let (lyrics_req_tx, lyrics_req_rx) = mpsc::channel();
+    let (media_cmd_tx, media_cmd_rx) = mpsc::channel();
+    let (calendar_cmd_tx, calendar_cmd_rx) = mpsc::channel();
+
+    platform::prepare_overlay_rules(WINDOW_TITLE, initial_y);
 
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Glow,
         viewport: egui::ViewportBuilder::default()
             .with_title(WINDOW_TITLE)
+            .with_app_id("liebert-dynamic-island")
             .with_decorations(false)
             .with_transparent(true)
             .with_always_on_top()
             .with_taskbar(false)
             .with_active(false)
-            .with_resizable(false)
+            .with_resizable(platform::overlay_resizable())
             .with_minimize_button(false)
             .with_maximize_button(false)
             .with_close_button(false)

@@ -24,6 +24,8 @@ liebert-dynamic-island/
 ├── Cargo.toml
 ├── AGENTS.md                    # Panduan kolaborasi & aturan repo
 ├── docs/                        # Dokumentasi Obsidian & PRD
+├── scripts/
+│   └── build-appimage.sh        # Skrip build & packaging AppImage Linux (x86_64)
 └── src/
     ├── main.rs                  # Entry point, CLI flags, & spawn background workers
     ├── config.rs                # Load/save config.toml (size, colors, presets, clock, idle mode, .ics URL)
@@ -35,12 +37,14 @@ liebert-dynamic-island/
     ├── calendar.rs              # RFC 5545 .ics parser & Google Calendar sync worker
     ├── tray.rs                  # System tray menu & lifecycle control
     ├── ui/
-    │   ├── mod.rs               # Overlay pill (Idle/Compact/Expanded tabs) & Win32 hover fix
+    │   ├── mod.rs               # Overlay pill (Idle/Compact/Expanded tabs), unified AA notch mesh, & UI loop
+    │   ├── icons.rs             # Crisp Painter-drawn vector icons & responsive icon buttons
     │   └── settings.rs          # Secondary viewport Settings (Appearance, Todo, Calendar)
     └── platform/
-        ├── mod.rs               # Facade lintas OS, MediaTrack, & PlatformEvent
-        ├── windows.rs           # Win32 hover/no-activate, WinRT Notifications & SMTC
-        └── linux.rs             # D-Bus Notifications & MPRIS2 media reader
+        ├── mod.rs               # Facade lintas OS (overlay, topmost, hover, font, MediaTrack, PlatformEvent)
+        ├── windows.rs           # Win32 hover/no-activate/DWM, WinRT Notifications & SMTC
+        ├── linux.rs             # D-Bus Notifications, MPRIS2, Hyprland IPC (/eval/layer_rule), & fontconfig lookup
+        └── wayland_layer.rs     # Native Wayland wlr-layer-shell EGL/egui_glow overlay & Settings IPC runner
 ```
 
 ## Skema Data & State Machine
@@ -57,9 +61,9 @@ pub struct NotificationItem {
 ```
 
 ### State Machine Overlay
-- **`Idle`:** Pill compact di top-center atau menyatu seamless dengan tepi atas monitor (`y = 0`) di atas kanvas permanen tetap (`permanent_canvas_size`) dengan transisi `notch_morph` (**Top Notch** ↔ **Floating Dynamic Island**, pergantian mode di paling atas tab Appearance **Settings**) dan area luar pill dibuat click-through via `set_overlay_click_through`; menampilkan mini cover + lirik karaoke (`Original` atau `Romaji` sesuai `karaoke_lyric_mode`), jam zona waktu (`render_dot_label`), atau jadwal terdekat; otomatis tersembunyi via `set_overlay_visible(false)` saat `auto_hide` atau `hide_in_fullscreen` aktif (dipantau background `spawn_fullscreen_watcher` ketika tidak ada notifikasi aktif).
-- **`Compact`:** Pill melebar menampilkan avatar berwarna brand aplikasi (`WhatsApp`, `Discord`, `Gmail`, browser, dll.), badge nama aplikasi terpisah tanpa overlap, judul, preview singkat, serta indikator jumlah antrean; tetap tampil di atas layar via `set_overlay_visible(true)` (`SW_SHOWNOACTIVATE`) bila notifikasi masuk saat aplikasi fullscreen aktif; timer auto-collapse default 5 detik.
-- **`Expanded`:** Aktif saat hover pada `Compact` (menjeda timer), menampilkan slot kiri/kanan terklip bersih (tab `Overview`, `♪ Music`, `☑ N`, `Calendar` + ikon vektor geometris `paint_vector_icon` yang membawa jendela Settings ke depan layar via `bring_window_to_front`), Music Card dengan judul/artis rata tengah terpotong rapi (`render_centered_truncated_text`), dan `ScrollArea` pada kolom lirik kanan. Juga menghormati opsi `show_notifications`.
+- **`Idle`:** Pill compact di top-center atau menyatu seamless dengan tepi atas monitor (`y = 0`) lewat transisi `notch_morph` (`Top Notch` ↔ `Floating Island`), menampilkan mini cover + lirik karaoke (`Original` atau `Romaji` sesuai `karaoke_lyric_mode`, disinkronkan via `duration` LRCLIB, `end_ms` jeda instrumental, & `lyric_offset_ms`) + 3-bar equalizer saat musik diputar (dengan opsi gradasi `#000` ke warna dominan album di paling bawah via `compact_album_gradient`), jam zona waktu, atau jadwal terdekat; otomatis tersembunyi saat `auto_hide` atau `hide_in_fullscreen` aktif.
+- **`Compact`:** Pill melebar menampilkan avatar berwarna brand aplikasi (`WhatsApp`, `Discord`, `Gmail`, browser, dll.), badge nama aplikasi terpisah tanpa overlap, judul, preview singkat, serta indikator jumlah antrean (turut mendukung gradasi `#000` → warna album bila musik aktif & `compact_album_gradient` menyala); timer auto-collapse default 5 detik.
+- **`Expanded`:** Aktif saat hover pada `Compact` (menjeda timer), menampilkan slot kiri/kanan terklip bersih (tab `Home`, `♪ Music`, `☑ N`, `Cal` + tombol cepat ganti mode `Island`/`Notch` + tombol `⚙` yang membawa jendela Settings ke depan layar via `bring_window_to_front`), dan `ScrollArea` pada kolom lirik kanan. Juga menghormati opsi `show_notifications`.
 
 ## Alur Komponen Utama
 1. **Startup:** `config.rs` membaca `config.toml` → `tray.rs` membuat ikon tray → `platform` memunculkan listener notifikasi di background thread/async task → `ui` membuka overlay window dalam state `Idle`.

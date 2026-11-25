@@ -2,19 +2,50 @@ use std::collections::HashMap;
 use std::future::pending;
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use zbus::{Connection, Dict, OwnedVariant, Proxy, Variant, connection, interface};
 
 use crate::platform::{
-    AlbumArt, MediaCommand, MediaTrack, PlatformEvent, RepeatMode, decode_album_art,
+    AlbumArt, FontFamilyTarget, FontFileSpec, HoverPollInput, MediaCommand, MediaTrack,
+    PlatformEvent, RepeatMode, decode_album_art,
 };
 use crate::state::{ListenerStatus, NotificationItem};
 
 // shortcut: Non-Hyprland Wayland compositors lack wlr-layer-shell positioning in winit/eframe; upgrade to smithay-client-toolkit or iced_layershell for compositor-agnostic layer surfaces.
+
+#[derive(Clone, Copy)]
+struct MonitorInfo {
+    x: f32,
+    y: f32,
+    logical_width: f32,
+    scale: f32,
+}
+
+struct LinuxOverlayCache {
+    monitor: Option<(Instant, MonitorInfo)>,
+    last_geometry: Option<(i32, i32, i32, i32)>,
+    last_topmost_sync: Option<Instant>,
+    last_hover_probe: Option<(Instant, bool)>,
+    last_trigger_probe: Option<(Instant, bool)>,
+}
+
+fn overlay_cache() -> &'static Mutex<LinuxOverlayCache> {
+    static CACHE: OnceLock<Mutex<LinuxOverlayCache>> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        Mutex::new(LinuxOverlayCache {
+            monitor: None,
+            last_geometry: None,
+            last_topmost_sync: None,
+            last_hover_probe: None,
+            last_trigger_probe: None,
+        })
+    })
+}
 
 fn hypr_socket_path() -> Option<PathBuf> {
     let sig = std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE")?;
@@ -29,7 +60,7 @@ fn hypr_socket_path() -> Option<PathBuf> {
 fn hypr_ipc(cmd: &str) -> Option<String> {
     let sock_path = hypr_socket_path()?;
     let mut stream = UnixStream::connect(sock_path).ok()?;
-    let timeout = Some(Duration::from_millis(50));
+    let timeout = Some(Duration::from_millis(100));
     let _ = stream.set_read_timeout(timeout);
     let _ = stream.set_write_timeout(timeout);
     stream.write_all(cmd.as_bytes()).ok()?;
@@ -39,7 +70,7 @@ fn hypr_ipc(cmd: &str) -> Option<String> {
 }
 
 fn hypr_eval_or_fallback(lua: &str, legacy_cmd: &str) {
-    if let Some(resp) = hypr_ipc(&format!("eval {lua}"))
+    if let Some(resp) = hypr_ipc(&format!("/eval {lua}"))
         && resp.trim() == "ok"
     {
         return;
@@ -51,7 +82,14 @@ fn escape_lua_str(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-fn hypr_focused_monitor() -> Option<(f32, f32, f32, f32)> {
+fn hypr_focused_monitor_cached() -> Option<MonitorInfo> {
+    if let Ok(guard) = overlay_cache().lock()
+        && let Some((at, mon)) = guard.monitor
+        && at.elapsed() < Duration::from_millis(500)
+    {
+        return Some(mon);
+    }
+
     let raw = hypr_ipc("j/monitors")?;
     let list: Vec<serde_json::Value> = serde_json::from_str(&raw).ok()?;
     let mon = list
@@ -61,8 +99,17 @@ fn hypr_focused_monitor() -> Option<(f32, f32, f32, f32)> {
     let x = mon.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
     let y = mon.get("y").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
     let width = mon.get("width").and_then(|v| v.as_f64()).unwrap_or(1920.0) as f32;
-    let scale = mon.get("scale").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
-    Some((x, y, width, scale.max(0.5)))
+    let scale = (mon.get("scale").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32).max(0.5);
+    let info = MonitorInfo {
+        x,
+        y,
+        logical_width: width / scale,
+        scale,
+    };
+    if let Ok(mut guard) = overlay_cache().lock() {
+        guard.monitor = Some((Instant::now(), info));
+    }
+    Some(info)
 }
 
 fn hypr_cursor_pos() -> Option<(f32, f32)> {
@@ -73,11 +120,29 @@ fn hypr_cursor_pos() -> Option<(f32, f32)> {
     Some((x, y))
 }
 
-pub fn primary_monitor_logical_width() -> f32 {
-    if let Some((_, _, width, _)) = hypr_focused_monitor() {
-        return width;
+pub fn should_send_outer_position() -> bool {
+    std::env::var_os("WAYLAND_DISPLAY").is_none()
+}
+
+pub fn primary_monitor_logical_width(_pixels_per_point: f32) -> f32 {
+    if let Some(mon) = hypr_focused_monitor_cached() {
+        return mon.logical_width;
     }
     1920.0
+}
+
+pub fn prepare_layer_shell_rules(namespace: &str) {
+    if hypr_socket_path().is_none() {
+        return;
+    }
+    let escaped = escape_lua_str(namespace);
+    let lua = format!(
+        "hl.layer_rule({{name=\"liebert-dynamic-island-layer\", match={{namespace=\"^{escaped}$\"}}, no_anim=true, blur=false, above_lock=false, order=-1}})"
+    );
+    let legacy = format!(
+        "[[BATCH]]/keyword layerrule noanim,^({namespace})$ ; /keyword layerrule order -1,^({namespace})$"
+    );
+    hypr_eval_or_fallback(&lua, &legacy);
 }
 
 pub fn prepare_overlay_rules(window_title: &str, top_offset_px: f32) {
@@ -87,59 +152,135 @@ pub fn prepare_overlay_rules(window_title: &str, top_offset_px: f32) {
     let y = top_offset_px.round() as i32;
     let escaped = escape_lua_str(window_title);
     let lua = format!(
-        "hl.window_rule({{match={{title=\"^{escaped}$\"}}, float=true, pin=true, no_initial_focus=true, no_blur=true, no_shadow=true, border_size=0, no_anim=true, move={{\"(monitor_w*0.5-window_w*0.5)\", \"{y}\"}}}})"
+        "hl.window_rule({{name=\"liebert-dynamic-island\", match={{class=\"^liebert-dynamic-island$\"}}, float=true, pin=true, no_initial_focus=true, no_blur=true, no_shadow=true, no_dim=true, no_glow=true, no_wobble=true, no_anim=true, decorate=false, border_size=0, rounding=0, move=\"(monitor_w*0.5-window_w*0.5) {y}\"}}); hl.window_rule({{name=\"liebert-dynamic-island-title\", match={{title=\"^{escaped}$\"}}, float=true, pin=true, no_initial_focus=true, no_blur=true, no_shadow=true, no_dim=true, no_glow=true, no_wobble=true, no_anim=true, decorate=false, border_size=0, rounding=0, move=\"(monitor_w*0.5-window_w*0.5) {y}\"}})"
     );
     let legacy = format!(
-        "[[BATCH]]keyword windowrulev2 float,title:^({window_title})$ ; keyword windowrulev2 pin,title:^({window_title})$ ; keyword windowrulev2 noinitialfocus,title:^({window_title})$ ; keyword windowrulev2 noborder,title:^({window_title})$ ; keyword windowrulev2 noshadow,title:^({window_title})$ ; keyword windowrulev2 noblur,title:^({window_title})$ ; keyword windowrulev2 noanim,title:^({window_title})$ ; keyword windowrulev2 move (monitor_w*0.5-window_w*0.5) {y},title:^({window_title})$"
+        "[[BATCH]]/keyword windowrulev2 float,title:^({window_title})$ ; /keyword windowrulev2 pin,title:^({window_title})$ ; /keyword windowrulev2 noinitialfocus,title:^({window_title})$ ; /keyword windowrulev2 noborder,title:^({window_title})$ ; /keyword windowrulev2 noshadow,title:^({window_title})$ ; /keyword windowrulev2 noblur,title:^({window_title})$ ; /keyword windowrulev2 nodim,title:^({window_title})$ ; /keyword windowrulev2 noanim,title:^({window_title})$ ; /keyword windowrulev2 rounding 0,title:^({window_title})$ ; /keyword windowrulev2 move (monitor_w*0.5-window_w*0.5) {y},title:^({window_title})$"
     );
     hypr_eval_or_fallback(&lua, &legacy);
 }
 
-pub fn apply_no_activate_hook(window_title: &str) {
+fn hypr_client_flags(window_title: &str) -> Option<(bool, bool)> {
+    let raw = hypr_ipc("j/clients")?;
+    let clients: Vec<serde_json::Value> = serde_json::from_str(&raw).ok()?;
+    let client = clients.iter().find(|c| {
+        (c.get("title").and_then(|v| v.as_str()) == Some(window_title)
+            || c.get("class").and_then(|v| v.as_str()) == Some("liebert-dynamic-island"))
+            && c.get("mapped").and_then(|v| v.as_bool()) == Some(true)
+    })?;
+    let floating = client.get("floating").and_then(|v| v.as_bool()).unwrap_or(false);
+    let pinned = client.get("pinned").and_then(|v| v.as_bool()).unwrap_or(false);
+    Some((floating, pinned))
+}
+
+fn dispatch_hypr_topmost(window_title: &str, check_legacy_flags: bool) {
+    let escaped = escape_lua_str(window_title);
+    let lua = format!(
+        "hl.dispatch(hl.dsp.window.float({{action=\"set\", window=\"title:^{escaped}$\"}})); hl.dispatch(hl.dsp.window.pin({{action=\"set\", window=\"title:^{escaped}$\"}})); hl.dispatch(hl.dsp.window.alter_zorder({{mode=\"top\", window=\"title:^{escaped}$\"}}))"
+    );
+    if let Some(resp) = hypr_ipc(&format!("/eval {lua}"))
+        && resp.trim() == "ok"
+    {
+        return;
+    }
+
+    let mut legacy_cmds = Vec::new();
+    if check_legacy_flags && let Some((floating, pinned)) = hypr_client_flags(window_title) {
+        if !floating {
+            legacy_cmds.push(format!("/dispatch setfloating title:^({window_title})$"));
+        }
+        if !pinned {
+            legacy_cmds.push(format!("/dispatch pin title:^({window_title})$"));
+        }
+    }
+    legacy_cmds.push(format!("/dispatch alterzorder top,title:^({window_title})$"));
+    let _ = hypr_ipc(&format!("[[BATCH]]{}", legacy_cmds.join(" ; ")));
+}
+
+pub fn apply_no_activate_hook(window_title: &str) -> bool {
+    if hypr_socket_path().is_none() {
+        return true;
+    }
+    if hypr_client_flags(window_title).is_none() {
+        return false;
+    }
+    dispatch_hypr_topmost(window_title, true);
+    if let Ok(mut guard) = overlay_cache().lock() {
+        guard.last_topmost_sync = Some(Instant::now());
+    }
+    true
+}
+
+pub fn ensure_overlay_topmost(window_title: &str, force: bool) {
     if hypr_socket_path().is_none() {
         return;
     }
-    let escaped = escape_lua_str(window_title);
-    let lua = format!(
-        "hl.dispatch(hl.dsp.window.float(\"title:^{escaped}$\")); hl.dispatch(hl.dsp.window.pin(\"title:^{escaped}$\"))"
-    );
-    let legacy = format!(
-        "[[BATCH]]dispatch setfloating title:^({window_title})$ ; dispatch pin title:^({window_title})$"
-    );
-    hypr_eval_or_fallback(&lua, &legacy);
+    if !force
+        && let Ok(guard) = overlay_cache().lock()
+        && let Some(at) = guard.last_topmost_sync
+        && at.elapsed() < Duration::from_millis(1000)
+    {
+        return;
+    }
+    if let Ok(mut guard) = overlay_cache().lock() {
+        guard.last_topmost_sync = Some(Instant::now());
+    }
+    dispatch_hypr_topmost(window_title, force);
 }
 
-pub fn position_overlay_window(
+pub fn sync_overlay_window(
     window_title: &str,
     x_logical: f32,
     y_logical: f32,
     w_logical: f32,
     h_logical: f32,
+    _notch_dock_mode: bool,
 ) {
     if hypr_socket_path().is_none() {
         return;
     }
-    let (mon_x, mon_y) = hypr_focused_monitor()
-        .map(|(x, y, _, _)| (x, y))
+    let (mon_x, mon_y) = hypr_focused_monitor_cached()
+        .map(|m| (m.x, m.y))
         .unwrap_or((0.0, 0.0));
     let tx = (mon_x + x_logical).round() as i32;
     let ty = (mon_y + y_logical).round() as i32;
     let tw = w_logical.round().max(1.0) as i32;
     let th = h_logical.round().max(1.0) as i32;
+    let geom = (tx, ty, tw, th);
+
+    if let Ok(mut guard) = overlay_cache().lock() {
+        if guard.last_geometry == Some(geom) {
+            return;
+        }
+        guard.last_geometry = Some(geom);
+        guard.last_topmost_sync = Some(Instant::now());
+    }
+
     let escaped = escape_lua_str(window_title);
     let lua = format!(
-        "hl.dispatch(hl.dsp.window.resize({{x={tw}, y={th}, exact=true, window=\"title:^{escaped}$\"}})); hl.dispatch(hl.dsp.window.move({{x={tx}, y={ty}, exact=true, window=\"title:^{escaped}$\"}}))"
+        "hl.dispatch(hl.dsp.window.float({{action=\"set\", window=\"title:^{escaped}$\"}})); hl.dispatch(hl.dsp.window.pin({{action=\"set\", window=\"title:^{escaped}$\"}})); hl.dispatch(hl.dsp.window.resize({{x={tw}, y={th}, exact=true, window=\"title:^{escaped}$\"}})); hl.dispatch(hl.dsp.window.move({{x={tx}, y={ty}, exact=true, window=\"title:^{escaped}$\"}})); hl.dispatch(hl.dsp.window.alter_zorder({{mode=\"top\", window=\"title:^{escaped}$\"}}))"
     );
     let legacy = format!(
-        "[[BATCH]]dispatch resizewindowpixel exact {tw} {th},title:^({window_title})$ ; dispatch movewindowpixel exact {tx} {ty},title:^({window_title})$"
+        "[[BATCH]]/dispatch resizewindowpixel exact {tw} {th},title:^({window_title})$ ; /dispatch movewindowpixel exact {tx} {ty},title:^({window_title})$ ; /dispatch alterzorder top,title:^({window_title})$"
     );
     hypr_eval_or_fallback(&lua, &legacy);
 }
 
-pub fn is_cursor_over_window(window_title: &str, padding_px: i32) -> Option<bool> {
+pub fn bring_window_to_front(window_title: &str) -> bool {
+    if hypr_socket_path().is_none() {
+        return true;
+    }
+    let escaped = escape_lua_str(window_title);
+    let lua = format!("hl.dispatch(hl.dsp.focus({{window=\"title:^{escaped}$\"}}))");
+    let legacy = format!("/dispatch focuswindow title:^({window_title})$");
+    hypr_eval_or_fallback(&lua, &legacy);
+    true
+}
+
+fn is_cursor_over_window(window_title: &str, padding_px: i32) -> Option<bool> {
     hypr_socket_path()?;
     let (cx, cy) = hypr_cursor_pos()?;
-    let (_, mon_y, _, _) = hypr_focused_monitor().unwrap_or((0.0, 0.0, 1920.0, 1.0));
+    let mon_y = hypr_focused_monitor_cached().map(|m| m.y).unwrap_or(0.0);
     if cy > mon_y + 480.0 {
         return Some(false);
     }
@@ -160,19 +301,65 @@ pub fn is_cursor_over_window(window_title: &str, padding_px: i32) -> Option<bool
     Some(cx >= x - pad && cx <= x + w + pad && cy >= y - pad && cy <= y + h + pad)
 }
 
-pub fn is_cursor_in_top_trigger(
-    top_offset_px: f32,
-    trigger_width_px: f32,
-    _pixels_per_point: f32,
-) -> Option<bool> {
+fn is_cursor_in_top_trigger(top_offset_px: f32, trigger_width_px: f32) -> Option<bool> {
     hypr_socket_path()?;
     let (cx, cy) = hypr_cursor_pos()?;
-    let (mon_x, mon_y, width, scale) = hypr_focused_monitor()?;
-    let logical_w = width / scale;
-    let center_x = mon_x + logical_w * 0.5;
+    let mon = hypr_focused_monitor_cached()?;
+    let _ = mon.scale;
+    let center_x = mon.x + mon.logical_width * 0.5;
     let half_w = trigger_width_px.max(120.0) * 0.5;
-    let trigger_bottom = mon_y + top_offset_px.max(0.0) + 12.0;
-    Some(cx >= center_x - half_w && cx <= center_x + half_w && cy >= mon_y && cy <= trigger_bottom)
+    let trigger_bottom = mon.y + top_offset_px.max(0.0) + 12.0;
+    Some(cx >= center_x - half_w && cx <= center_x + half_w && cy >= mon.y && cy <= trigger_bottom)
+}
+
+pub fn detect_overlay_hover(input: HoverPollInput<'_>) -> bool {
+    if !input.visible {
+        if let Ok(guard) = overlay_cache().lock()
+            && let Some((at, cached)) = guard.last_trigger_probe
+            && at.elapsed() < Duration::from_millis(75)
+        {
+            return cached;
+        }
+        let result = is_cursor_in_top_trigger(input.top_offset_px, input.trigger_width_px)
+            .unwrap_or(false);
+        if let Ok(mut guard) = overlay_cache().lock() {
+            guard.last_trigger_probe = Some((Instant::now(), result));
+        }
+        return result;
+    }
+
+    // Fast path: trust active pointer interactions and native Wayland/X11 pointer-inside events with 0 IPC calls.
+    if input.pointer_busy || input.ctx_hovered {
+        return true;
+    }
+
+    if hypr_socket_path().is_none() {
+        return false;
+    }
+
+    if let Ok(guard) = overlay_cache().lock()
+        && let Some((at, cached)) = guard.last_hover_probe
+        && at.elapsed() < Duration::from_millis(33)
+    {
+        return cached;
+    }
+
+    let pad = if input.animating {
+        24
+    } else if input.currently_hovered {
+        8
+    } else {
+        2
+    };
+    let over = is_cursor_over_window(input.window_title, pad).unwrap_or(false)
+        || (input.currently_hovered
+            && input.animating
+            && is_cursor_in_top_trigger(input.top_offset_px, input.trigger_width_px)
+                .unwrap_or(false));
+    if let Ok(mut guard) = overlay_cache().lock() {
+        guard.last_hover_probe = Some((Instant::now(), over));
+    }
+    over
 }
 
 pub fn is_foreground_fullscreen() -> bool {
@@ -186,6 +373,124 @@ pub fn is_foreground_fullscreen() -> bool {
         return false;
     }
     win.get("fullscreen").and_then(|v| v.as_i64()).unwrap_or(0) != 0
+}
+
+fn first_existing_path(candidates: &[&str]) -> Option<String> {
+    candidates
+        .iter()
+        .find(|p| Path::new(p).is_file())
+        .map(|p| (*p).to_owned())
+}
+
+fn fc_match_file(pattern: &str) -> Option<String> {
+    let out = Command::new("fc-match")
+        .args(["-f", "%{file}", pattern])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let path = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+    (!path.is_empty() && Path::new(&path).is_file()).then_some(path)
+}
+
+pub fn base_fallback_fonts() -> Vec<FontFileSpec> {
+    let mut specs = Vec::new();
+
+    if let Some(path) = first_existing_path(&[
+        "/usr/share/fonts/noto/NotoSans-Regular.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+        "/usr/share/fonts/google-noto/NotoSans-Regular.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    ])
+    .or_else(|| fc_match_file("sans-serif"))
+    {
+        specs.push(FontFileSpec {
+            name: "linux_sans".to_owned(),
+            path,
+            family: FontFamilyTarget::Proportional,
+            face_indices: &[0],
+        });
+    }
+
+    if let Some(path) = first_existing_path(&[
+        "/usr/share/fonts/noto/NotoSansMono-Regular.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSansMono-Regular.ttf",
+        "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+    ])
+    .or_else(|| fc_match_file("monospace"))
+    {
+        specs.push(FontFileSpec {
+            name: "linux_mono".to_owned(),
+            path,
+            family: FontFamilyTarget::Monospace,
+            face_indices: &[0],
+        });
+    }
+
+    if let Some(path) = first_existing_path(&[
+        "/usr/share/fonts/noto/NotoSansSymbols-Regular.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSansSymbols-Regular.ttf",
+    ]) {
+        specs.push(FontFileSpec {
+            name: "linux_symbols".to_owned(),
+            path,
+            family: FontFamilyTarget::Both,
+            face_indices: &[0],
+        });
+    }
+
+    if let Some(path) = first_existing_path(&[
+        "/usr/share/fonts/noto/NotoSansSymbols2-Regular.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSansSymbols2-Regular.ttf",
+    ]) {
+        specs.push(FontFileSpec {
+            name: "linux_symbols2".to_owned(),
+            path,
+            family: FontFamilyTarget::Both,
+            face_indices: &[0],
+        });
+    }
+
+    if let Some(path) = first_existing_path(&[
+        "/usr/share/fonts/noto/NotoSansArabic-Regular.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf",
+    ]) {
+        specs.push(FontFileSpec {
+            name: "linux_arabic".to_owned(),
+            path,
+            family: FontFamilyTarget::Proportional,
+            face_indices: &[0],
+        });
+    }
+
+    specs
+}
+
+pub fn cjk_fallback_fonts() -> Vec<FontFileSpec> {
+    const CJK_FACES: &[u32] = &[0, 1, 2, 3];
+    if let Some(path) = first_existing_path(&[
+        "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",
+    ])
+    .or_else(|| fc_match_file(":lang=ja"))
+    {
+        let faces = if path.ends_with(".ttc") {
+            CJK_FACES
+        } else {
+            &[0][..]
+        };
+        return vec![FontFileSpec {
+            name: "linux_noto_cjk".to_owned(),
+            path,
+            family: FontFamilyTarget::Both,
+            face_indices: faces,
+        }];
+    }
+    Vec::new()
 }
 
 struct NotificationServer {
@@ -589,4 +894,50 @@ pub fn list_installed_fonts() -> Vec<super::InstalledFont> {
         dirs.push(std::path::PathBuf::from(home).join(".local/share/fonts"));
     }
     super::collect_fonts_from_dirs(&dirs)
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn base_and_cjk_font_discovery_finds_existing_files() {
+        let base = base_fallback_fonts();
+        for spec in &base {
+            assert!(Path::new(&spec.path).is_file(), "missing font {}", spec.path);
+            assert!(!spec.face_indices.is_empty());
+        }
+        let cjk = cjk_fallback_fonts();
+        for spec in &cjk {
+            assert!(Path::new(&spec.path).is_file(), "missing cjk font {}", spec.path);
+            assert!(!spec.face_indices.is_empty());
+        }
+    }
+
+    #[test]
+    fn detect_overlay_hover_fast_paths_avoid_false_collapse() {
+        let busy = detect_overlay_hover(HoverPollInput {
+            window_title: "Nonexistent",
+            ctx_hovered: false,
+            pointer_busy: true,
+            currently_hovered: true,
+            visible: true,
+            animating: false,
+            top_offset_px: 0.0,
+            trigger_width_px: 180.0,
+            pixels_per_point: 1.0,
+        });
+        assert!(busy);
+
+        let ctx_hit = detect_overlay_hover(HoverPollInput {
+            window_title: "Nonexistent",
+            ctx_hovered: true,
+            pointer_busy: false,
+            currently_hovered: false,
+            visible: true,
+            animating: false,
+            top_offset_px: 0.0,
+            trigger_width_px: 180.0,
+            pixels_per_point: 1.0,
+        });
+        assert!(ctx_hit);
+    }
 }
