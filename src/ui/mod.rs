@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use eframe::egui::{
     self, Color32, ColorImage, CornerRadius, FontId, Mesh, Pos2, Rect, RichText, Sense, Shape,
     Stroke, StrokeKind, TextureHandle, TextureOptions, Vec2, ViewportCommand,
+    text::{LayoutJob, TextFormat},
 };
 use eframe::epaint::RectShape;
 use eframe::epaint::text::{FontInsert, FontPriority, InsertFontFamily};
@@ -84,6 +85,17 @@ enum IslandTab {
     Calendar,
 }
 
+/// Fixed transparent window size big enough for the largest card, so hover/notch animations
+/// never resize the OS window (the cause of open/close flicker).
+pub fn permanent_canvas_size(config: &Config) -> Vec2 {
+    let s = config.scale;
+    let ear_pad = (12.0 * s).ceil() * 2.0;
+    Vec2::new(
+        (config.expanded_width.max(468.0) * s + ear_pad).ceil(),
+        (292.0 * s + config.top_offset_px.max(12.0)).ceil(),
+    )
+}
+
 pub struct AppChannels {
     pub event_rx: mpsc::Receiver<PlatformEvent>,
     pub lyrics_req_tx: mpsc::Sender<LyricsRequest>,
@@ -115,12 +127,12 @@ pub struct IslandApp {
     new_todo_input: String,
     calendar_url_input: String,
     current_size: Vec2,
-    applied_size: Vec2,
+    applied_window_size: Vec2,
+    last_passthrough: Option<bool>,
     notch_morph: f32,
-    applied_top_y: f32,
     test_notif_seq: u32,
     last_frame: Instant,
-    last_fullscreen_check: Instant,
+    last_fullscreen_raw: bool,
     no_activate_applied: bool,
     last_visible: bool,
     last_egui_hovered: bool,
@@ -178,12 +190,12 @@ impl IslandApp {
             new_todo_input: String::new(),
             calendar_url_input,
             current_size: initial_size,
-            applied_size: Vec2::ZERO,
+            applied_window_size: Vec2::ZERO,
+            last_passthrough: None,
             notch_morph,
-            applied_top_y: -1.0,
             test_notif_seq: 0,
             last_frame: now,
-            last_fullscreen_check: now - Duration::from_secs(1),
+            last_fullscreen_raw: false,
             no_activate_applied: false,
             last_visible: true,
             last_egui_hovered: false,
@@ -212,17 +224,11 @@ impl IslandApp {
         self.config.top_offset_px * (1.0 - self.notch_morph)
     }
 
-    fn toggle_dock_mode(&mut self) {
-        self.config.notch_dock_mode = !self.config.notch_dock_mode;
-        if let Some(tray) = &self.tray {
-            tray.update_dock_mode(self.config.notch_dock_mode);
-        }
-        if let Err(err) = self.config.save() {
-            eprintln!("Failed to save config: {err}");
-        }
-    }
-
     fn push_test_notification(&mut self, now: Instant) {
+        if self.state.paused {
+            self.state.set_paused(false);
+            self.sync_tray();
+        }
         let samples = [
             ("WhatsApp", "Budi", "Meeting jam 14:00 jadi pindah ke Discord?"),
             ("Discord", "#general — Alex", "Deploy staging barusan sukses, cek log!"),
@@ -404,6 +410,9 @@ impl IslandApp {
                     self.state.listener_status = status;
                     status_changed = true;
                 }
+                PlatformEvent::Fullscreen(fs) => {
+                    self.last_fullscreen_raw = fs;
+                }
                 PlatformEvent::Media(track) => {
                     self.media = track;
                     if let Some((artist, title)) = self
@@ -466,10 +475,6 @@ impl IslandApp {
                 match action {
                     TrayAction::OpenSettings => {
                         self.open_settings(SettingsTab::Appearance, ctx);
-                    }
-                    TrayAction::ToggleDockMode => {
-                        self.toggle_dock_mode();
-                        ctx.request_repaint();
                     }
                     TrayAction::TestNotification => {
                         self.push_test_notification(now);
@@ -647,49 +652,56 @@ impl eframe::App for IslandApp {
 
         let target_morph = if self.config.notch_dock_mode { 1.0 } else { 0.0 };
         let morph_diff = target_morph - self.notch_morph;
-        let morphing = morph_diff.abs() >= 0.004;
+        let morphing = morph_diff.abs() >= 0.002;
         if morphing {
-            let m_t = 1.0 - (-12.0 * dt).exp();
+            let m_t = 1.0 - (-13.0 * dt).exp();
             self.notch_morph += morph_diff * m_t;
-            if (target_morph - self.notch_morph).abs() < 0.004 {
+            if (target_morph - self.notch_morph).abs() < 0.002 {
                 self.notch_morph = target_morph;
             }
         } else {
             self.notch_morph = target_morph;
         }
 
-        let mut fs_changed = false;
-        if now.duration_since(self.last_fullscreen_check) >= Duration::from_millis(250) {
-            self.last_fullscreen_check = now;
-            let fs = self.config.hide_in_fullscreen && platform::is_foreground_fullscreen();
-            fs_changed = self.state.set_fullscreen_active(fs);
-        }
+        let fs = self.config.hide_in_fullscreen && self.last_fullscreen_raw;
+        let fs_changed = self.state.set_fullscreen_active(fs);
 
-        // Win32 WS_EX_NOACTIVATE windows can drop pointer-hover events; poll OS cursor bounds
-        // and top-edge trigger zone (even while auto-hidden) so hovering top-center reveals the notch.
+        // Win32 WS_EX_NOACTIVATE windows can drop pointer-hover events; poll exact drawn pill
+        // bounds and top-edge trigger zone so envelope animations stay completely glitch-free.
         let top_y = self.effective_top_offset();
+        let ppp = ctx.pixels_per_point().max(1.0);
+        let screen_w = platform::primary_monitor_logical_width() / ppp;
         let trigger_w = self.config.idle_width.max(180.0) * self.config.scale;
-        let top_trigger =
-            platform::is_cursor_in_top_trigger(top_y, trigger_w, ctx.pixels_per_point());
-        let hovered = if self.state.hide_in_fullscreen && self.state.fullscreen_active {
+        let top_trigger = platform::is_cursor_in_top_trigger(top_y, trigger_w, ppp);
+        let hovered = if self.state.hide_in_fullscreen
+            && self.state.fullscreen_active
+            && self.state.active.is_none()
+        {
             false
         } else if !self.last_visible {
             top_trigger.unwrap_or(false)
         } else {
-            let pad = if self.state.hovered { 6 } else { 0 };
-            let over_win = platform::is_cursor_over_window(WINDOW_TITLE, pad)
-                .unwrap_or(self.last_egui_hovered);
-            over_win || (self.state.hovered && top_trigger.unwrap_or(false))
+            let pill_x = ((screen_w - self.current_size.x) * 0.5).max(0.0);
+            let pad = if self.state.hovered { 8.0 } else { 2.0 };
+            let over_pill = platform::is_cursor_in_screen_rect(
+                ((pill_x - pad) * ppp) as i32,
+                ((top_y - pad) * ppp).max(0.0) as i32,
+                ((pill_x + self.current_size.x + pad) * ppp) as i32,
+                ((top_y + self.current_size.y + pad) * ppp) as i32,
+            )
+            .unwrap_or(self.last_egui_hovered);
+            over_pill || (self.state.hovered && top_trigger.unwrap_or(false))
         };
         let hover_changed = self.state.set_hovered(hovered, now);
 
         self.state.tick(now);
 
         let visible = self.state.should_be_visible(now);
-        let became_visible = visible && !self.last_visible;
         if visible != self.last_visible {
             self.last_visible = visible;
-            ctx.send_viewport_cmd(ViewportCommand::Visible(visible));
+            if !platform::set_overlay_visible(WINDOW_TITLE, visible) {
+                ctx.send_viewport_cmd(ViewportCommand::Visible(visible));
+            }
         }
 
         if self.show_settings && self.settings_focus_requested {
@@ -701,36 +713,37 @@ impl eframe::App for IslandApp {
         }
 
         let target = self.target_size();
-        let t = 1.0 - (-14.0 * dt).exp();
+        let t = 1.0 - (-16.0 * dt).exp();
         self.current_size += (target - self.current_size) * t;
-        let animating = (target - self.current_size).length_sq() > 0.25;
+        let animating = (target - self.current_size).length_sq() > 0.0225;
         if !animating {
             self.current_size = target;
         }
 
-        if (self.current_size - self.applied_size).length_sq() > 0.25
-            || (top_y - self.applied_top_y).abs() > 0.25
-            || hover_changed
-        {
-            self.applied_size = self.current_size;
-            self.applied_top_y = top_y;
-            let screen_w =
-                platform::primary_monitor_logical_width() / ctx.pixels_per_point().max(1.0);
-            let x = ((screen_w - self.current_size.x) * 0.5).max(0.0);
-            ctx.send_viewport_cmd(ViewportCommand::InnerSize(self.current_size));
-            ctx.send_viewport_cmd(ViewportCommand::OuterPosition(Pos2::new(
-                x,
-                self.config.top_offset_px,
-            )));
-            if visible {
-                platform::position_overlay_window(
-                    WINDOW_TITLE,
-                    x,
-                    self.config.top_offset_px,
-                    self.current_size.x,
-                    self.current_size.y,
-                );
-            }
+        // The overlay keeps one permanent transparent canvas at y = 0: opening, closing and
+        // notch morphing only repaint inside it, so the OS window is never resized mid-animation.
+        let canvas_size = permanent_canvas_size(&self.config);
+        if (canvas_size - self.applied_window_size).length_sq() > 0.25 {
+            self.applied_window_size = canvas_size;
+            let win_x = ((screen_w - canvas_size.x) * 0.5).max(0.0);
+            ctx.send_viewport_cmd(ViewportCommand::InnerSize(canvas_size));
+            ctx.send_viewport_cmd(ViewportCommand::OuterPosition(Pos2::new(win_x, 0.0)));
+            platform::position_overlay_window(
+                WINDOW_TITLE,
+                win_x,
+                0.0,
+                canvas_size.x,
+                canvas_size.y,
+            );
+        }
+        if self.last_visible {
+            platform::pin_window_top_y(WINDOW_TITLE, 0);
+        }
+
+        let passthrough = !self.last_visible || !hovered;
+        if self.last_passthrough != Some(passthrough) {
+            self.last_passthrough = Some(passthrough);
+            platform::set_overlay_click_through(WINDOW_TITLE, passthrough);
         }
 
         let playing_music = self.config.show_lyrics && self.media.as_ref().is_some_and(|m| m.is_playing);
@@ -747,7 +760,9 @@ impl eframe::App for IslandApp {
             ctx.request_repaint_after(Duration::from_millis(33));
         } else if showing_idle_bars {
             ctx.request_repaint_after(Duration::from_millis(50));
-        } else if (self.state.hide_in_fullscreen && self.state.fullscreen_active)
+        } else if (self.state.hide_in_fullscreen
+            && self.state.fullscreen_active
+            && self.state.active.is_none())
             || playing_lyrics
             || showing_live_seconds
         {
@@ -771,7 +786,6 @@ impl eframe::App for IslandApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         let now = Instant::now();
-        self.last_egui_hovered = ui.rect_contains_pointer(ui.max_rect());
 
         let pill_radius = (self.current_size.y * 0.5).clamp(12.0, 28.0);
         let notch_radius = (14.0 * self.config.scale).clamp(10.0, 20.0);
@@ -793,79 +807,95 @@ impl eframe::App for IslandApp {
             && self.media.is_some();
 
         let ear_w = self.notch_ear_width();
-        let card_rect = ui.max_rect();
+        let top_y = self.effective_top_offset();
 
-        let frame = if is_music_card {
-            let floating_bg = [30, 29, 28, self.config.bg_color[3].max(240)];
-            let docked_bg = [12, 12, 14, 252];
-            let base_bg = [
-                lerp_u8(floating_bg[0], docked_bg[0], self.notch_morph),
-                lerp_u8(floating_bg[1], docked_bg[1], self.notch_morph),
-                lerp_u8(floating_bg[2], docked_bg[2], self.notch_morph),
-                lerp_u8(floating_bg[3], docked_bg[3], self.notch_morph),
-            ];
-            let accent_rgb = self.effective_accent_rgb();
-            self.ensure_gradient_texture(&ctx, base_bg, accent_rgb);
-            paint_island_surface(
-                ui.painter(),
-                card_rect,
-                SurfaceStyle {
-                    ear_w,
-                    top_radius,
-                    bot_radius,
-                    fill: Color32::from_rgba_unmultiplied(
-                        base_bg[0], base_bg[1], base_bg[2], base_bg[3],
-                    ),
-                    grad_tex: self.gradient_tex.as_ref(),
-                    border_alpha,
-                },
-            );
-            let pad_x = (16.0 + ear_w).round() as i8;
-            egui::Frame::NONE.inner_margin(egui::Margin::symmetric(pad_x, 10))
-        } else {
-            let base = self.bg_color32();
-            let fill = if self.state.visual == IslandVisualState::Idle {
-                Color32::from_rgba_unmultiplied(
-                    lerp_u8(base.r(), 7, self.notch_morph),
-                    lerp_u8(base.g(), 7, self.notch_morph),
-                    lerp_u8(base.b(), 9, self.notch_morph),
-                    lerp_u8(base.a(), 252, self.notch_morph),
-                )
-            } else {
-                base
-            };
-            paint_island_surface(
-                ui.painter(),
-                card_rect,
-                SurfaceStyle {
-                    ear_w,
-                    top_radius,
-                    bot_radius,
-                    fill,
-                    grad_tex: None,
-                    border_alpha,
-                },
-            );
-            let pad_x = (13.0 + ear_w).round() as i8;
-            let pad_y = if self.state.visual == IslandVisualState::Idle {
-                5
-            } else {
-                9
-            };
-            egui::Frame::NONE.inner_margin(egui::Margin::symmetric(pad_x, pad_y))
-        };
+        egui::CentralPanel::default()
+            .frame(egui::Frame::NONE)
+            .show(ui, |ui| {
+                let canvas = ui.max_rect();
+                let card_x = canvas.left() + ((canvas.width() - self.current_size.x) * 0.5).max(0.0);
+                let card_y = canvas.top() + top_y;
+                let card_rect = Rect::from_min_size(Pos2::new(card_x, card_y), self.current_size);
+                self.last_egui_hovered = ui.rect_contains_pointer(card_rect);
 
-        egui::CentralPanel::default().frame(frame).show(ui, |ui| {
-            match self.state.visual {
-                IslandVisualState::Expanded => {
-                    if self.current_size.y >= 95.0 * self.config.scale {
-                        self.render_expanded(ui, &ctx, now);
-                    }
+                let (pad_x, pad_y) = if is_music_card {
+                    let floating_bg = [30, 29, 28, self.config.bg_color[3].max(240)];
+                    let docked_bg = [12, 12, 14, 252];
+                    let base_bg = [
+                        lerp_u8(floating_bg[0], docked_bg[0], self.notch_morph),
+                        lerp_u8(floating_bg[1], docked_bg[1], self.notch_morph),
+                        lerp_u8(floating_bg[2], docked_bg[2], self.notch_morph),
+                        lerp_u8(floating_bg[3], docked_bg[3], self.notch_morph),
+                    ];
+                    let accent_rgb = self.effective_accent_rgb();
+                    self.ensure_gradient_texture(&ctx, base_bg, accent_rgb);
+                    paint_island_surface(
+                        ui.painter(),
+                        card_rect,
+                        SurfaceStyle {
+                            ear_w,
+                            top_radius,
+                            bot_radius,
+                            fill: Color32::from_rgba_unmultiplied(
+                                base_bg[0], base_bg[1], base_bg[2], base_bg[3],
+                            ),
+                            grad_tex: self.gradient_tex.as_ref(),
+                            border_alpha,
+                        },
+                    );
+                    (16.0 + ear_w, 10.0)
+                } else {
+                    let base = self.bg_color32();
+                    let fill = if self.state.visual == IslandVisualState::Idle {
+                        Color32::from_rgba_unmultiplied(
+                            lerp_u8(base.r(), 7, self.notch_morph),
+                            lerp_u8(base.g(), 7, self.notch_morph),
+                            lerp_u8(base.b(), 9, self.notch_morph),
+                            lerp_u8(base.a(), 252, self.notch_morph),
+                        )
+                    } else {
+                        base
+                    };
+                    paint_island_surface(
+                        ui.painter(),
+                        card_rect,
+                        SurfaceStyle {
+                            ear_w,
+                            top_radius,
+                            bot_radius,
+                            fill,
+                            grad_tex: None,
+                            border_alpha,
+                        },
+                    );
+                    let py = if self.state.visual == IslandVisualState::Idle {
+                        5.0
+                    } else {
+                        9.0
+                    };
+                    (13.0 + ear_w, py)
+                };
+
+                let inner_rect = card_rect.shrink2(Vec2::new(pad_x, pad_y));
+                if inner_rect.width() >= 10.0 && inner_rect.height() >= 8.0 {
+                    ui.scope_builder(egui::UiBuilder::new().max_rect(inner_rect), |ui| {
+                        ui.set_clip_rect(card_rect);
+                        match self.state.visual {
+                            IslandVisualState::Expanded => {
+                                let expand_alpha = ((self.current_size.y - 60.0 * self.config.scale)
+                                    / (56.0 * self.config.scale))
+                                    .clamp(0.0, 1.0);
+                                if expand_alpha > 0.02 {
+                                    ui.multiply_opacity(expand_alpha);
+                                    self.render_expanded(ui, &ctx, now);
+                                }
+                            }
+                            IslandVisualState::Compact => self.render_compact(ui),
+                            IslandVisualState::Idle => self.render_idle(ui, &ctx, now),
+                        }
+                    });
                 }
-                IslandVisualState::Compact => self.render_compact(ui),
-                IslandVisualState::Idle => self.render_idle(ui, &ctx, now),
-            }
-        });
+            });
 
         let prev_lyric_opts = (
             self.config.romaji_lyrics,
@@ -911,12 +941,12 @@ impl eframe::App for IslandApp {
                 .set_auto_hide_delay(Duration::from_secs(self.config.auto_hide_delay_secs));
             self.state
                 .set_hide_in_fullscreen(self.config.hide_in_fullscreen);
-            self.last_fullscreen_check = now - Duration::from_secs(1);
+            self.state
+                .set_fullscreen_active(self.config.hide_in_fullscreen && self.last_fullscreen_raw);
             self.state
                 .set_collapse_timeout(Duration::from_secs(self.config.collapse_timeout_secs));
             if let Some(tray) = &self.tray {
                 tray.set_auto_hide_checked(self.config.auto_hide_when_idle);
-                tray.update_dock_mode(self.config.notch_dock_mode);
             }
             if let Err(err) = self.config.save() {
                 eprintln!("Failed to save config: {err}");
@@ -960,8 +990,9 @@ impl IslandApp {
                     let active = active_karaoke(&self.lyrics, pos_ms);
 
                     ui.horizontal_centered(|ui| {
-                        // Left mini album cover or soft circular music disc (matching reference notch).
-                        let badge_sz = 19.0 * s;
+                        ui.spacing_mut().item_spacing.x = 6.0 * s;
+                        // Left mini album cover or soft circular music disc.
+                        let badge_sz = 18.0 * s;
                         let (badge_rect, _) =
                             ui.allocate_exact_size(Vec2::splat(badge_sz), Sense::hover());
                         let badge_rad = CornerRadius::same((5.0 * s).round() as u8);
@@ -993,17 +1024,25 @@ impl IslandApp {
                             );
                         }
 
-                        ui.add_space(3.0 * s);
-                        let bars_reserve = 22.0 * s;
-                        let text_w = (ui.available_width() - bars_reserve).max(40.0);
+                        let bars_w = 18.0 * s;
+                        let gap = 6.0 * s;
+                        let text_w = (ui.available_width() - bars_w - gap).max(40.0);
                         ui.allocate_ui_with_layout(
                             Vec2::new(text_w, 20.0 * s),
                             egui::Layout::left_to_right(egui::Align::Center),
                             |ui| {
-                                ui.label(
-                                    RichText::new("♪")
-                                        .font(FontId::proportional(11.0 * s))
-                                        .color(muted),
+                                ui.set_clip_rect(ui.max_rect());
+                                ui.spacing_mut().item_spacing.x = 4.0 * s;
+                                let (note_rect, _) = ui.allocate_exact_size(
+                                    Vec2::new(12.0 * s, 18.0 * s),
+                                    Sense::hover(),
+                                );
+                                ui.painter().text(
+                                    note_rect.center(),
+                                    egui::Align2::CENTER_CENTER,
+                                    "♪",
+                                    FontId::proportional(11.0 * s),
+                                    muted,
                                 );
                                 if let Some(k) = active {
                                     let lyric_text = if self.config.karaoke_lyric_mode
@@ -1050,10 +1089,20 @@ impl IslandApp {
                             },
                         );
 
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            let secs = ui.input(|i| i.time) as f32;
-                            render_audio_bars(ui, secs, track.is_playing, Color32::from_gray(225), s);
-                        });
+                        ui.allocate_ui_with_layout(
+                            Vec2::new(bars_w, 20.0 * s),
+                            egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
+                            |ui| {
+                                let secs = ui.input(|i| i.time) as f32;
+                                render_audio_bars(
+                                    ui,
+                                    secs,
+                                    track.is_playing,
+                                    Color32::from_gray(225),
+                                    s,
+                                );
+                            },
+                        );
                     });
                     return;
                 }
@@ -1066,38 +1115,40 @@ impl IslandApp {
                     self.config.clock_show_seconds,
                 );
                 let show_tz = !self.config.clock_timezone.eq_ignore_ascii_case("local");
-                ui.centered_and_justified(|ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            RichText::new("●")
-                                .font(FontId::proportional(8.5 * s))
-                                .color(if self.state.paused {
-                                    Color32::from_gray(140)
-                                } else {
-                                    accent
-                                }),
-                        );
-                        ui.label(
-                            RichText::new(time_str)
-                                .font(FontId::monospace(12.0 * s))
-                                .color(text_col)
-                                .strong(),
-                        );
-                        if show_tz {
-                            ui.label(
-                                RichText::new(tz_label)
-                                    .font(FontId::proportional(9.5 * s))
-                                    .color(muted),
-                            );
-                        }
-                    });
-                });
+                let dot_color = if self.state.paused {
+                    Color32::from_gray(140)
+                } else {
+                    accent
+                };
+                let mut job = LayoutJob::default();
+                job.append(
+                    &time_str,
+                    0.0,
+                    TextFormat {
+                        font_id: FontId::monospace(12.0 * s),
+                        color: text_col,
+                        ..Default::default()
+                    },
+                );
+                if show_tz {
+                    job.append(
+                        &format!("  {tz_label}"),
+                        0.0,
+                        TextFormat {
+                            font_id: FontId::proportional(9.5 * s),
+                            color: muted,
+                            ..Default::default()
+                        },
+                    );
+                }
+                render_dot_label(ui, dot_color, 3.0 * s, job);
                 return;
             }
             IdleDisplayMode::NextEvent if self.config.show_calendar => {
                 let now_utc = chrono::Utc::now().timestamp();
                 if let Some(ev) = upcoming_events(&self.calendar_events, now_utc, 1).first() {
                     ui.horizontal_centered(|ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0 * s;
                         ui.label(
                             RichText::new(format_countdown(ev.start_utc, ev.end_utc, now_utc))
                                 .font(FontId::proportional(10.5 * s))
@@ -1119,25 +1170,22 @@ impl IslandApp {
             _ => {}
         }
 
-        ui.centered_and_justified(|ui| {
-            let (dot_color, text) = if self.state.paused {
-                (Color32::from_gray(140), "Paused")
-            } else {
-                (accent, "Liebert")
-            };
-            ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new("●")
-                        .font(FontId::proportional(9.5 * s))
-                        .color(dot_color),
-                );
-                ui.label(
-                    RichText::new(text)
-                        .font(FontId::proportional(11.0 * s))
-                        .color(muted),
-                );
-            });
-        });
+        let (dot_color, text) = if self.state.paused {
+            (Color32::from_gray(140), "Paused")
+        } else {
+            (accent, "Liebert")
+        };
+        let mut job = LayoutJob::default();
+        job.append(
+            text,
+            0.0,
+            TextFormat {
+                font_id: FontId::proportional(11.0 * s),
+                color: muted,
+                ..Default::default()
+            },
+        );
+        render_dot_label(ui, dot_color, 3.0 * s, job);
     }
 
     fn render_compact(&self, ui: &mut egui::Ui) {
@@ -1149,51 +1197,54 @@ impl IslandApp {
         let text_col = self.text_color32();
         let muted = self.muted_color32();
         let s = self.config.scale;
+        let queued = self.state.queued_count();
 
         ui.horizontal_centered(|ui| {
+            ui.spacing_mut().item_spacing = Vec2::new(6.0 * s, 2.0 * s);
             render_app_avatar(ui, &item.app_name, brand, 28.0 * s, s);
-            ui.add_space(6.0 * s);
-            let badge_reserve = if self.state.queued_count() > 0 {
-                34.0 * s
-            } else {
-                0.0
-            };
+            let badge_reserve = if queued > 0 { 36.0 * s } else { 0.0 };
             let text_w = (ui.available_width() - badge_reserve).max(60.0);
             ui.allocate_ui_with_layout(
-                Vec2::new(text_w, 38.0 * s),
+                Vec2::new(text_w, 34.0 * s),
                 egui::Layout::top_down(egui::Align::LEFT),
                 |ui| {
                     ui.set_clip_rect(ui.max_rect());
-                    ui.horizontal(|ui| {
-                        if !item.app_name.eq_ignore_ascii_case(&item.title) {
-                            egui::Frame::new()
-                                .fill(Color32::from_rgba_unmultiplied(
-                                    brand.r(),
-                                    brand.g(),
-                                    brand.b(),
-                                    36,
-                                ))
-                                .corner_radius(CornerRadius::same(6))
-                                .inner_margin(egui::Margin::symmetric(5, 1))
-                                .show(ui, |ui| {
-                                    ui.label(
-                                        RichText::new(&item.app_name)
-                                            .font(FontId::proportional(9.0 * s))
-                                            .color(brand)
-                                            .strong(),
-                                    );
-                                });
-                        }
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(&item.title)
-                                    .font(FontId::proportional(12.5 * s))
-                                    .color(text_col)
-                                    .strong(),
-                            )
-                            .truncate(),
-                        );
-                    });
+                    ui.spacing_mut().item_spacing.y = 2.0 * s;
+                    ui.allocate_ui_with_layout(
+                        Vec2::new(text_w, 17.0 * s),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            ui.spacing_mut().item_spacing.x = 5.0 * s;
+                            if !item.app_name.eq_ignore_ascii_case(&item.title) {
+                                egui::Frame::new()
+                                    .fill(Color32::from_rgba_unmultiplied(
+                                        brand.r(),
+                                        brand.g(),
+                                        brand.b(),
+                                        36,
+                                    ))
+                                    .corner_radius(CornerRadius::same(6))
+                                    .inner_margin(egui::Margin::symmetric(5, 1))
+                                    .show(ui, |ui| {
+                                        ui.label(
+                                            RichText::new(&item.app_name)
+                                                .font(FontId::proportional(9.0 * s))
+                                                .color(brand)
+                                                .strong(),
+                                        );
+                                    });
+                            }
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(&item.title)
+                                        .font(FontId::proportional(12.5 * s))
+                                        .color(text_col)
+                                        .strong(),
+                                )
+                                .truncate(),
+                            );
+                        },
+                    );
                     let sub = if item.body.is_empty() {
                         &item.app_name
                     } else {
@@ -1209,21 +1260,24 @@ impl IslandApp {
                     );
                 },
             );
-            let queued = self.state.queued_count();
             if queued > 0 {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    egui::Frame::new()
-                        .fill(Color32::from_rgba_unmultiplied(255, 255, 255, 22))
-                        .corner_radius(CornerRadius::same(10))
-                        .inner_margin(egui::Margin::symmetric(7, 2))
-                        .show(ui, |ui| {
-                            ui.label(
-                                RichText::new(format!("+{queued}"))
-                                    .font(FontId::proportional(10.5 * s))
-                                    .color(text_col),
-                            );
-                        });
-                });
+                ui.allocate_ui_with_layout(
+                    Vec2::new(30.0 * s, 28.0 * s),
+                    egui::Layout::right_to_left(egui::Align::Center),
+                    |ui| {
+                        egui::Frame::new()
+                            .fill(Color32::from_rgba_unmultiplied(255, 255, 255, 22))
+                            .corner_radius(CornerRadius::same(10))
+                            .inner_margin(egui::Margin::symmetric(7, 2))
+                            .show(ui, |ui| {
+                                ui.label(
+                                    RichText::new(format!("+{queued}"))
+                                        .font(FontId::proportional(10.5 * s))
+                                        .color(text_col),
+                                );
+                            });
+                    },
+                );
             }
         });
     }
@@ -1233,16 +1287,11 @@ impl IslandApp {
         let text_col = self.text_color32();
         let muted = self.muted_color32();
         let s = self.config.scale;
-        let mode_btn_label = if self.config.notch_dock_mode {
-            "Island"
-        } else {
-            "Notch"
-        };
 
         if let Some(item) = self.state.active.clone() {
             let brand = app_brand_color(&item.app_name, accent);
             let row_h = 26.0 * s;
-            let right_w = 152.0 * s;
+            let right_w = 96.0 * s;
             let left_w = (ui.available_width() - right_w - 6.0 * s).max(80.0);
             ui.horizontal(|ui| {
                 ui.allocate_ui_with_layout(
@@ -1250,15 +1299,8 @@ impl IslandApp {
                     egui::Layout::left_to_right(egui::Align::Center),
                     |ui| {
                         ui.set_clip_rect(ui.max_rect());
+                        ui.spacing_mut().item_spacing.x = 6.0 * s;
                         render_app_avatar(ui, &item.app_name, brand, 22.0 * s, s);
-                        let queued = self.state.queued_count();
-                        if queued > 0 {
-                            ui.label(
-                                RichText::new(format!("+{queued}"))
-                                    .font(FontId::proportional(10.5 * s))
-                                    .color(muted),
-                            );
-                        }
                         ui.add(
                             egui::Label::new(
                                 RichText::new(&item.app_name)
@@ -1268,6 +1310,14 @@ impl IslandApp {
                             )
                             .truncate(),
                         );
+                        let queued = self.state.queued_count();
+                        if queued > 0 {
+                            ui.label(
+                                RichText::new(format!("+{queued}"))
+                                    .font(FontId::proportional(10.5 * s))
+                                    .color(muted),
+                            );
+                        }
                     },
                 );
                 ui.add_space(6.0 * s);
@@ -1276,37 +1326,17 @@ impl IslandApp {
                     egui::Layout::right_to_left(egui::Align::Center),
                     |ui| {
                         ui.set_clip_rect(ui.max_rect());
-                        if ui
-                            .add(
-                                egui::Button::new(
-                                    RichText::new("⚙")
-                                        .font(FontId::proportional(12.0 * s))
-                                        .color(muted),
-                                )
-                                .min_size(Vec2::new(24.0 * s, 22.0 * s))
-                                .fill(Color32::from_rgba_unmultiplied(255, 255, 255, 16))
-                                .corner_radius(CornerRadius::same(10)),
-                            )
-                            .on_hover_text("Open Settings")
-                            .clicked()
-                        {
+                        ui.spacing_mut().item_spacing.x = 5.0 * s;
+                        if render_icon_button(
+                            ui,
+                            Vec2::splat(24.0 * s),
+                            "⚙",
+                            12.0 * s,
+                            muted,
+                            Some((Color32::from_rgba_unmultiplied(255, 255, 255, 16), 10)),
+                            "Open Settings",
+                        ) {
                             self.open_settings(SettingsTab::Appearance, ctx);
-                        }
-                        if ui
-                            .add(
-                                egui::Button::new(
-                                    RichText::new(mode_btn_label)
-                                        .font(FontId::proportional(10.5 * s))
-                                        .color(muted),
-                                )
-                                .fill(Color32::from_rgba_unmultiplied(255, 255, 255, 16))
-                                .corner_radius(CornerRadius::same(10)),
-                            )
-                            .on_hover_text("Switch Notch / Floating Island")
-                            .clicked()
-                        {
-                            self.toggle_dock_mode();
-                            ctx.request_repaint();
                         }
                         if ui
                             .add(
@@ -1315,6 +1345,7 @@ impl IslandApp {
                                         .font(FontId::proportional(11.0 * s))
                                         .color(Color32::WHITE),
                                 )
+                                .min_size(Vec2::new(58.0 * s, 24.0 * s))
                                 .fill(Color32::from_rgba_unmultiplied(255, 255, 255, 24))
                                 .corner_radius(CornerRadius::same(10)),
                             )
@@ -1349,7 +1380,7 @@ impl IslandApp {
 
         let is_music_card = self.active_tab == IslandTab::Music && self.media.is_some();
         let row_h = 24.0 * s;
-        let right_w = 88.0 * s;
+        let right_w = 28.0 * s;
         let left_w = (ui.available_width() - right_w - 6.0 * s).max(160.0);
         ui.horizontal(|ui| {
             ui.allocate_ui_with_layout(
@@ -1357,8 +1388,8 @@ impl IslandApp {
                 egui::Layout::left_to_right(egui::Align::Center),
                 |ui| {
                     ui.set_clip_rect(ui.max_rect());
-                    ui.spacing_mut().item_spacing.x = 4.0 * s;
-                    render_pill_tab(ui, &mut self.active_tab, IslandTab::Overview, "Home", accent, s);
+                    ui.spacing_mut().item_spacing.x = 5.0 * s;
+                    render_pill_tab(ui, &mut self.active_tab, IslandTab::Overview, "Overview", accent, s);
                     if self.config.show_lyrics {
                         render_pill_tab(ui, &mut self.active_tab, IslandTab::Music, "♪ Music", accent, s);
                     }
@@ -1367,7 +1398,7 @@ impl IslandApp {
                         render_pill_tab(ui, &mut self.active_tab, IslandTab::Todo, &label, accent, s);
                     }
                     if self.config.show_calendar {
-                        render_pill_tab(ui, &mut self.active_tab, IslandTab::Calendar, "Cal", accent, s);
+                        render_pill_tab(ui, &mut self.active_tab, IslandTab::Calendar, "Calendar", accent, s);
                     }
                 },
             );
@@ -1377,38 +1408,16 @@ impl IslandApp {
                 egui::Layout::right_to_left(egui::Align::Center),
                 |ui| {
                     ui.set_clip_rect(ui.max_rect());
-                    ui.spacing_mut().item_spacing.x = 4.0 * s;
-                    if ui
-                        .add(
-                            egui::Button::new(
-                                RichText::new("⚙")
-                                    .font(FontId::proportional(12.0 * s))
-                                    .color(muted),
-                            )
-                            .min_size(Vec2::new(24.0 * s, 22.0 * s))
-                            .fill(Color32::from_rgba_unmultiplied(255, 255, 255, 16))
-                            .corner_radius(CornerRadius::same(10)),
-                        )
-                        .on_hover_text("Open Settings")
-                        .clicked()
-                    {
+                    if render_icon_button(
+                        ui,
+                        Vec2::splat(24.0 * s),
+                        "⚙",
+                        12.0 * s,
+                        muted,
+                        Some((Color32::from_rgba_unmultiplied(255, 255, 255, 16), 10)),
+                        "Open Settings",
+                    ) {
                         self.open_settings(SettingsTab::Appearance, ctx);
-                    }
-                    if ui
-                        .add(
-                            egui::Button::new(
-                                RichText::new(mode_btn_label)
-                                    .font(FontId::proportional(10.5 * s))
-                                    .color(muted),
-                            )
-                            .fill(Color32::from_rgba_unmultiplied(255, 255, 255, 16))
-                            .corner_radius(CornerRadius::same(10)),
-                        )
-                        .on_hover_text("Switch Notch / Floating Island")
-                        .clicked()
-                    {
-                        self.toggle_dock_mode();
-                        ctx.request_repaint();
                     }
                 },
             );
@@ -1441,29 +1450,34 @@ impl IslandApp {
             self.config.clock_24h,
             self.config.clock_show_seconds,
         );
-        ui.horizontal(|ui| {
-            ui.label(
-                RichText::new(time_str)
-                    .font(FontId::monospace(15.0 * s))
-                    .color(text_col)
-                    .strong(),
-            );
-            egui::Frame::new()
-                .fill(Color32::from_rgba_unmultiplied(255, 255, 255, 16))
-                .corner_radius(CornerRadius::same(8))
-                .inner_margin(egui::Margin::symmetric(6, 2))
-                .show(ui, |ui| {
-                    ui.label(
-                        RichText::new(tz_label)
-                            .font(FontId::proportional(9.5 * s))
-                            .color(muted),
-                    );
-                });
-        });
+        ui.allocate_ui_with_layout(
+            Vec2::new(ui.available_width(), 22.0 * s),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                ui.spacing_mut().item_spacing.x = 6.0 * s;
+                ui.label(
+                    RichText::new(time_str)
+                        .font(FontId::monospace(15.0 * s))
+                        .color(text_col)
+                        .strong(),
+                );
+                egui::Frame::new()
+                    .fill(Color32::from_rgba_unmultiplied(255, 255, 255, 16))
+                    .corner_radius(CornerRadius::same(8))
+                    .inner_margin(egui::Margin::symmetric(6, 2))
+                    .show(ui, |ui| {
+                        ui.label(
+                            RichText::new(tz_label)
+                                .font(FontId::proportional(9.5 * s))
+                                .color(muted),
+                        );
+                    });
+            },
+        );
         ui.add_space(4.0);
 
         if self.config.show_lyrics {
-            if let Some(track) = &self.media {
+            let clicked = if let Some(track) = &self.media {
                 let pos_ms = self.current_lyric_ms(now);
                 let lyric = active_karaoke(&self.lyrics, pos_ms)
                     .map(|k| {
@@ -1474,26 +1488,20 @@ impl IslandApp {
                         }
                     })
                     .unwrap_or("No synced lyric");
-                if ui
-                    .add(
-                        egui::Label::new(
-                            RichText::new(format!("♪ {} — {}", track.title, lyric))
-                                .font(FontId::proportional(11.5 * s))
-                                .color(accent),
-                        )
-                        .truncate()
-                        .sense(egui::Sense::click()),
-                    )
-                    .clicked()
-                {
-                    self.active_tab = IslandTab::Music;
-                }
+                render_overview_summary_row(
+                    ui,
+                    "♪",
+                    accent,
+                    &format!("{} — {}", track.title, lyric),
+                    accent,
+                    s,
+                    true,
+                )
             } else {
-                ui.label(
-                    RichText::new("♪ No music playing")
-                        .font(FontId::proportional(11.5 * s))
-                        .color(muted),
-                );
+                render_overview_summary_row(ui, "♪", muted, "No music playing", muted, s, false)
+            };
+            if clicked {
+                self.active_tab = IslandTab::Music;
             }
         }
 
@@ -1502,44 +1510,31 @@ impl IslandApp {
             let next = upcoming_events(&self.calendar_events, now_utc, 1);
             let cal_text = if let Some(ev) = next.first() {
                 format!(
-                    "📅 {} ({})",
+                    "{} ({})",
                     ev.summary,
                     format_countdown(ev.start_utc, ev.end_utc, now_utc)
                 )
             } else if self.config.google_calendar_ics_url.is_empty() {
-                "📅 Connect Google Calendar in Settings".to_owned()
+                "Connect Google Calendar in Settings".to_owned()
             } else {
-                "📅 No upcoming events".to_owned()
+                "No upcoming events".to_owned()
             };
-            if ui
-                .add(
-                    egui::Label::new(
-                        RichText::new(cal_text)
-                            .font(FontId::proportional(11.5 * s))
-                            .color(text_col),
-                    )
-                    .truncate()
-                    .sense(egui::Sense::click()),
-                )
-                .clicked()
-            {
+            if render_overview_summary_row(ui, "📅", accent, &cal_text, text_col, s, true) {
                 self.active_tab = IslandTab::Calendar;
             }
         }
 
         if self.config.show_todo {
             let pending = self.todos.pending_count();
-            if ui
-                .add(
-                    egui::Label::new(
-                        RichText::new(format!("☑ {pending} pending task(s)"))
-                            .font(FontId::proportional(11.5 * s))
-                            .color(muted),
-                    )
-                    .sense(egui::Sense::click()),
-                )
-                .clicked()
-            {
+            if render_overview_summary_row(
+                ui,
+                "☑",
+                muted,
+                &format!("{pending} pending task(s)"),
+                muted,
+                s,
+                true,
+            ) {
                 self.active_tab = IslandTab::Todo;
             }
         }
@@ -1610,23 +1605,18 @@ impl IslandApp {
                     }
 
                     ui.add_space(6.0 * s);
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(&track.title)
-                                .font(FontId::proportional(13.0 * s))
-                                .color(text_col)
-                                .strong(),
-                        )
-                        .truncate(),
+                    render_centered_truncated_text(
+                        ui,
+                        &track.title,
+                        FontId::proportional(13.0 * s),
+                        text_col,
                     );
                     if !track.artist.is_empty() {
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(&track.artist)
-                                    .font(FontId::proportional(11.0 * s))
-                                    .color(muted),
-                            )
-                            .truncate(),
+                        render_centered_truncated_text(
+                            ui,
+                            &track.artist,
+                            FontId::proportional(11.0 * s),
+                            muted,
                         );
                     }
 
@@ -1642,105 +1632,97 @@ impl IslandApp {
                     }
 
                     ui.add_space(4.0 * s);
-                    ui.horizontal(|ui| {
-                        let controls_w = 148.0 * s;
-                        let side = ((ui.available_width() - controls_w) * 0.5).max(0.0);
-                        ui.add_space(side);
-
-                        let shuf_col = if track.shuffle { accent } else { muted };
-                        if ui
-                            .add(
-                                egui::Button::new(
-                                    RichText::new("🔀").font(FontId::proportional(12.0 * s)).color(shuf_col),
-                                )
-                                .frame(false),
-                            )
-                            .on_hover_text("Shuffle")
-                            .clicked()
-                        {
-                            let next_shuf = !track.shuffle;
-                            let _ = self
-                                .channels
-                                .media_cmd_tx
-                                .send(MediaCommand::SetShuffle(next_shuf));
-                            if let Some(m) = &mut self.media {
-                                m.shuffle = next_shuf;
+                    let controls_w = 146.0 * s;
+                    ui.allocate_ui_with_layout(
+                        Vec2::new(controls_w, 30.0 * s),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            ui.spacing_mut().item_spacing.x = 4.0 * s;
+                            let shuf_col = if track.shuffle { accent } else { muted };
+                            if render_icon_button(
+                                ui,
+                                Vec2::splat(24.0 * s),
+                                "🔀",
+                                12.0 * s,
+                                shuf_col,
+                                None,
+                                "Shuffle",
+                            ) {
+                                let next_shuf = !track.shuffle;
+                                let _ = self
+                                    .channels
+                                    .media_cmd_tx
+                                    .send(MediaCommand::SetShuffle(next_shuf));
+                                if let Some(m) = &mut self.media {
+                                    m.shuffle = next_shuf;
+                                }
                             }
-                        }
 
-                        if ui
-                            .add(
-                                egui::Button::new(
-                                    RichText::new("⏮").font(FontId::proportional(13.5 * s)).color(text_col),
-                                )
-                                .frame(false),
-                            )
-                            .on_hover_text("Previous")
-                            .clicked()
-                        {
-                            let _ = self.channels.media_cmd_tx.send(MediaCommand::Previous);
-                        }
-
-                        let play_icon = if track.is_playing { "⏸" } else { "▶" };
-                        if ui
-                            .add(
-                                egui::Button::new(
-                                    RichText::new(play_icon)
-                                        .font(FontId::proportional(16.0 * s))
-                                        .color(Color32::WHITE)
-                                        .strong(),
-                                )
-                                .frame(false),
-                            )
-                            .on_hover_text("Play / Pause")
-                            .clicked()
-                        {
-                            let _ = self
-                                .channels
-                                .media_cmd_tx
-                                .send(MediaCommand::TogglePlayPause);
-                        }
-
-                        if ui
-                            .add(
-                                egui::Button::new(
-                                    RichText::new("⏭").font(FontId::proportional(13.5 * s)).color(text_col),
-                                )
-                                .frame(false),
-                            )
-                            .on_hover_text("Next")
-                            .clicked()
-                        {
-                            let _ = self.channels.media_cmd_tx.send(MediaCommand::Next);
-                        }
-
-                        let (rep_icon, rep_col) = match track.repeat {
-                            RepeatMode::Off => ("🔁", muted),
-                            RepeatMode::All => ("🔁", accent),
-                            RepeatMode::One => ("🔂", accent),
-                        };
-                        if ui
-                            .add(
-                                egui::Button::new(
-                                    RichText::new(rep_icon)
-                                        .font(FontId::proportional(12.0 * s))
-                                        .color(rep_col),
-                                )
-                                .frame(false),
-                            )
-                            .on_hover_text("Repeat (Off / All / One)")
-                            .clicked()
-                        {
-                            let next_rep = track.repeat.next();
-                            let _ = self
-                                .channels
-                                .media_cmd_tx
-                                .send(MediaCommand::SetRepeat(next_rep));
-                            if let Some(m) = &mut self.media {
-                                m.repeat = next_rep;
+                            if render_icon_button(
+                                ui,
+                                Vec2::splat(26.0 * s),
+                                "⏮",
+                                13.5 * s,
+                                text_col,
+                                None,
+                                "Previous",
+                            ) {
+                                let _ = self.channels.media_cmd_tx.send(MediaCommand::Previous);
                             }
-                        }
-                    });
+
+                            let play_icon = if track.is_playing { "⏸" } else { "▶" };
+                            if render_icon_button(
+                                ui,
+                                Vec2::splat(30.0 * s),
+                                play_icon,
+                                14.5 * s,
+                                Color32::WHITE,
+                                Some((Color32::from_rgba_unmultiplied(255, 255, 255, 26), 15)),
+                                "Play / Pause",
+                            ) {
+                                let _ = self
+                                    .channels
+                                    .media_cmd_tx
+                                    .send(MediaCommand::TogglePlayPause);
+                            }
+
+                            if render_icon_button(
+                                ui,
+                                Vec2::splat(26.0 * s),
+                                "⏭",
+                                13.5 * s,
+                                text_col,
+                                None,
+                                "Next",
+                            ) {
+                                let _ = self.channels.media_cmd_tx.send(MediaCommand::Next);
+                            }
+
+                            let (rep_icon, rep_col) = match track.repeat {
+                                RepeatMode::Off => ("🔁", muted),
+                                RepeatMode::All => ("🔁", accent),
+                                RepeatMode::One => ("🔂", accent),
+                            };
+                            if render_icon_button(
+                                ui,
+                                Vec2::splat(24.0 * s),
+                                rep_icon,
+                                12.0 * s,
+                                rep_col,
+                                None,
+                                "Repeat (Off / All / One)",
+                            ) {
+                                let next_rep = track.repeat.next();
+                                let _ = self
+                                    .channels
+                                    .media_cmd_tx
+                                    .send(MediaCommand::SetRepeat(next_rep));
+                                if let Some(m) = &mut self.media {
+                                    m.repeat = next_rep;
+                                }
+                            }
+                        },
+                    );
                 },
             );
 
@@ -1951,27 +1933,46 @@ impl IslandApp {
                     );
                 }
                 for item in &self.todos.items {
-                    ui.horizontal(|ui| {
-                        let mut done = item.done;
-                        let label = if item.done {
-                            RichText::new(&item.text)
-                                .font(FontId::proportional(11.5 * s))
-                                .color(muted)
-                                .strikethrough()
-                        } else {
-                            RichText::new(&item.text)
-                                .font(FontId::proportional(11.5 * s))
-                                .color(text_col)
-                        };
-                        if ui.checkbox(&mut done, label).changed() {
-                            toggle_id = Some(item.id);
-                        }
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.small_button("×").clicked() {
+                    let row_w = ui.available_width();
+                    let btn_w = 24.0 * s;
+                    ui.allocate_ui_with_layout(
+                        Vec2::new(row_w, 22.0 * s),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            ui.allocate_ui_with_layout(
+                                Vec2::new((row_w - btn_w - 4.0 * s).max(80.0), 22.0 * s),
+                                egui::Layout::left_to_right(egui::Align::Center),
+                                |ui| {
+                                    ui.set_clip_rect(ui.max_rect());
+                                    let mut done = item.done;
+                                    let label = if item.done {
+                                        RichText::new(&item.text)
+                                            .font(FontId::proportional(11.5 * s))
+                                            .color(muted)
+                                            .strikethrough()
+                                    } else {
+                                        RichText::new(&item.text)
+                                            .font(FontId::proportional(11.5 * s))
+                                            .color(text_col)
+                                    };
+                                    if ui.checkbox(&mut done, label).changed() {
+                                        toggle_id = Some(item.id);
+                                    }
+                                },
+                            );
+                            if render_icon_button(
+                                ui,
+                                Vec2::new(btn_w, 20.0 * s),
+                                "×",
+                                12.0 * s,
+                                muted,
+                                None,
+                                "Remove",
+                            ) {
                                 remove_id = Some(item.id);
                             }
-                        });
-                    });
+                        },
+                    );
                 }
             });
 
@@ -2022,28 +2023,48 @@ impl IslandApp {
         }
 
         for ev in upcoming {
-            ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new(format_local_time(ev.start_utc))
-                        .font(FontId::monospace(11.0 * s))
-                        .color(accent),
-                );
-                ui.add(
-                    egui::Label::new(
-                        RichText::new(&ev.summary)
-                            .font(FontId::proportional(11.5 * s))
-                            .color(text_col),
-                    )
-                    .truncate(),
-                );
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(
-                        RichText::new(format_countdown(ev.start_utc, ev.end_utc, now_utc))
-                            .font(FontId::proportional(10.5 * s))
-                            .color(muted),
+            let row_w = ui.available_width();
+            let cd_w = 72.0 * s;
+            let left_w = (row_w - cd_w - 6.0 * s).max(100.0);
+            ui.allocate_ui_with_layout(
+                Vec2::new(row_w, 22.0 * s),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    ui.allocate_ui_with_layout(
+                        Vec2::new(left_w, 22.0 * s),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            ui.set_clip_rect(ui.max_rect());
+                            ui.spacing_mut().item_spacing.x = 6.0 * s;
+                            ui.label(
+                                RichText::new(format_local_time(ev.start_utc))
+                                    .font(FontId::monospace(11.0 * s))
+                                    .color(accent),
+                            );
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(&ev.summary)
+                                        .font(FontId::proportional(11.5 * s))
+                                        .color(text_col),
+                                )
+                                .truncate(),
+                            );
+                        },
                     );
-                });
-            });
+                    ui.allocate_ui_with_layout(
+                        Vec2::new(cd_w, 22.0 * s),
+                        egui::Layout::right_to_left(egui::Align::Center),
+                        |ui| {
+                            ui.set_clip_rect(ui.max_rect());
+                            ui.label(
+                                RichText::new(format_countdown(ev.start_utc, ev.end_utc, now_utc))
+                                    .font(FontId::proportional(10.5 * s))
+                                    .color(muted),
+                            );
+                        },
+                    );
+                },
+            );
         }
     }
 }
@@ -2294,6 +2315,216 @@ fn render_app_avatar(
     );
 }
 
+fn truncate_with_ellipsis(text: &str, fits: impl Fn(&str) -> bool) -> String {
+    if fits(text) {
+        return text.to_owned();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let (mut lo, mut hi) = (0usize, chars.len());
+    while lo < hi {
+        let mid = (lo + hi).div_ceil(2);
+        let cand: String = chars[..mid].iter().collect::<String>() + "…";
+        if fits(&cand) {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    chars[..lo].iter().collect::<String>() + "…"
+}
+
+fn render_centered_truncated_text(ui: &mut egui::Ui, text: &str, font: FontId, color: Color32) {
+    let max_w = ui.available_width();
+    let painter = ui.painter().clone();
+    let shown = truncate_with_ellipsis(text, |t| {
+        painter
+            .layout_no_wrap(t.to_owned(), font.clone(), color)
+            .size()
+            .x
+            <= max_w
+    });
+    let galley = painter.layout_no_wrap(shown, font, color);
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(max_w, galley.size().y), Sense::hover());
+    let pos = Pos2::new(rect.center().x - galley.size().x * 0.5, rect.top());
+    painter
+        .with_clip_rect(rect)
+        .galley(pos, galley, Color32::TRANSPARENT);
+}
+
+fn render_dot_label(ui: &mut egui::Ui, dot_color: Color32, dot_radius: f32, job: LayoutJob) {
+    let galley = ui.painter().layout_job(job);
+    let (rect, _) = ui.allocate_exact_size(ui.available_size(), Sense::hover());
+    let gap = dot_radius * 2.0;
+    let total_w = dot_radius * 2.0 + gap + galley.size().x;
+    let start_x = rect.center().x - total_w * 0.5;
+    let cy = rect.center().y;
+    ui.painter()
+        .circle_filled(Pos2::new(start_x + dot_radius, cy), dot_radius, dot_color);
+    ui.painter().galley(
+        Pos2::new(start_x + dot_radius * 2.0 + gap, cy - galley.size().y * 0.5),
+        galley,
+        Color32::TRANSPARENT,
+    );
+}
+
+fn paint_vector_icon(painter: &egui::Painter, rect: Rect, icon: &str, color: Color32) -> bool {
+    let c = rect.center();
+    let u = rect.width().min(rect.height());
+    let bar = |cx: f32, w: f32, h: f32| {
+        painter.rect_filled(
+            Rect::from_center_size(Pos2::new(cx, c.y), Vec2::new(w, h)),
+            CornerRadius::same(1),
+            color,
+        );
+    };
+    let tri = |pts: [Pos2; 3]| {
+        painter.add(Shape::convex_polygon(pts.to_vec(), color, Stroke::NONE));
+    };
+    match icon {
+        "⚙" => {
+            let stroke = Stroke::new((u * 0.07).max(1.2), color);
+            painter.circle_stroke(c, u * 0.22, stroke);
+            painter.circle_filled(c, u * 0.07, color);
+            for i in 0..8 {
+                let a = i as f32 * PI / 4.0;
+                let (sin, cos) = a.sin_cos();
+                painter.line_segment(
+                    [
+                        Pos2::new(c.x + cos * u * 0.27, c.y + sin * u * 0.27),
+                        Pos2::new(c.x + cos * u * 0.37, c.y + sin * u * 0.37),
+                    ],
+                    Stroke::new((u * 0.1).max(1.6), color),
+                );
+            }
+            true
+        }
+        "▶" => {
+            let x = c.x + u * 0.04;
+            tri([
+                Pos2::new(x - u * 0.16, c.y - u * 0.22),
+                Pos2::new(x - u * 0.16, c.y + u * 0.22),
+                Pos2::new(x + u * 0.22, c.y),
+            ]);
+            true
+        }
+        "⏸" => {
+            bar(c.x - u * 0.1, u * 0.12, u * 0.42);
+            bar(c.x + u * 0.1, u * 0.12, u * 0.42);
+            true
+        }
+        "⏮" => {
+            bar(c.x - u * 0.22, u * 0.08, u * 0.4);
+            tri([
+                Pos2::new(c.x + u * 0.2, c.y - u * 0.2),
+                Pos2::new(c.x + u * 0.2, c.y + u * 0.2),
+                Pos2::new(c.x - u * 0.12, c.y),
+            ]);
+            true
+        }
+        "⏭" => {
+            bar(c.x + u * 0.22, u * 0.08, u * 0.4);
+            tri([
+                Pos2::new(c.x - u * 0.2, c.y - u * 0.2),
+                Pos2::new(c.x - u * 0.2, c.y + u * 0.2),
+                Pos2::new(c.x + u * 0.12, c.y),
+            ]);
+            true
+        }
+        _ => false,
+    }
+}
+
+fn render_icon_button(
+    ui: &mut egui::Ui,
+    size: Vec2,
+    icon: &str,
+    font_size: f32,
+    color: Color32,
+    bg: Option<(Color32, u8)>,
+    hover_text: &str,
+) -> bool {
+    let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+    let hovered = resp.hovered();
+    if let Some((fill, radius)) = bg {
+        let actual_fill = if hovered {
+            Color32::from_rgba_unmultiplied(
+                fill.r(),
+                fill.g(),
+                fill.b(),
+                fill.a().saturating_add(24),
+            )
+        } else {
+            fill
+        };
+        ui.painter()
+            .rect_filled(rect, CornerRadius::same(radius), actual_fill);
+    } else if hovered {
+        ui.painter().rect_filled(
+            rect,
+            CornerRadius::same((size.y * 0.5).round() as u8),
+            Color32::from_rgba_unmultiplied(255, 255, 255, 20),
+        );
+    }
+    let icon_color = if hovered { Color32::WHITE } else { color };
+    if !paint_vector_icon(ui.painter(), rect, icon, icon_color) {
+        ui.painter().text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            icon,
+            FontId::proportional(font_size),
+            icon_color,
+        );
+    }
+    let clicked = resp.clicked();
+    if !hover_text.is_empty() {
+        resp.on_hover_text(hover_text);
+    }
+    clicked
+}
+
+fn render_overview_summary_row(
+    ui: &mut egui::Ui,
+    icon: &str,
+    icon_color: Color32,
+    text: &str,
+    text_color: Color32,
+    scale: f32,
+    clickable: bool,
+) -> bool {
+    let mut clicked = false;
+    let row_w = ui.available_width();
+    ui.allocate_ui_with_layout(
+        Vec2::new(row_w, 19.0 * scale),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            ui.set_clip_rect(ui.max_rect());
+            ui.spacing_mut().item_spacing.x = 6.0 * scale;
+            let (icon_rect, _) =
+                ui.allocate_exact_size(Vec2::new(16.0 * scale, 16.0 * scale), Sense::hover());
+            ui.painter().text(
+                icon_rect.center(),
+                egui::Align2::CENTER_CENTER,
+                icon,
+                FontId::proportional(11.5 * scale),
+                icon_color,
+            );
+            let mut label = egui::Label::new(
+                RichText::new(text)
+                    .font(FontId::proportional(11.5 * scale))
+                    .color(text_color),
+            )
+            .truncate();
+            if clickable {
+                label = label.sense(Sense::click());
+            }
+            if ui.add(label).clicked() && clickable {
+                clicked = true;
+            }
+        },
+    );
+    clicked
+}
+
 fn render_pill_tab(
     ui: &mut egui::Ui,
     active: &mut IslandTab,
@@ -2323,6 +2554,7 @@ fn render_pill_tab(
             .font(FontId::proportional(11.0 * scale))
             .color(text_col),
     )
+    .min_size(Vec2::new(0.0, 24.0 * scale))
     .fill(fill)
     .stroke(stroke)
     .corner_radius(CornerRadius::same(10));
@@ -2342,7 +2574,7 @@ fn render_karaoke_line(
     let avail_w = ui.available_width().max(24.0);
     let dim_galley = ui.painter().layout_no_wrap(text.to_owned(), font.clone(), dim_color);
     let lit_galley = ui.painter().layout_no_wrap(text.to_owned(), font, lit_color);
-    let h = dim_galley.size().y.max(14.0);
+    let h = dim_galley.size().y.max(16.0);
     let (rect, _) = ui.allocate_exact_size(Vec2::new(avail_w, h), Sense::hover());
 
     let text_w = dim_galley.size().x.min(avail_w);
@@ -2352,7 +2584,8 @@ fn render_karaoke_line(
     } else {
         0.0
     };
-    let draw_pos = Pos2::new(rect.left() + scroll_x, rect.top());
+    let draw_y = rect.center().y - dim_galley.size().y * 0.5;
+    let draw_pos = Pos2::new(rect.left() + scroll_x, draw_y);
     let base_painter = ui.painter().with_clip_rect(rect);
     base_painter.galley(draw_pos, dim_galley, Color32::TRANSPARENT);
 
@@ -2385,51 +2618,73 @@ fn render_playbar(
         0.0
     };
 
-    ui.horizontal(|ui| {
-        ui.label(
-            RichText::new(format_mm_ss(clamped_pos))
-                .font(FontId::monospace(9.5 * scale))
-                .color(muted),
-        );
+    let row_w = ui.available_width();
+    let time_w = 32.0 * scale;
+    let gap = 6.0 * scale;
+    let bar_w = (row_w - time_w * 2.0 - gap * 2.0).max(40.0);
 
-        let bar_w = (ui.available_width() - 38.0 * scale).max(40.0);
-        let (rect, resp) = ui.allocate_exact_size(
-            Vec2::new(bar_w, 12.0 * scale),
-            Sense::click_and_drag(),
-        );
-        let cy = rect.center().y;
-        let track_h = 3.5 * scale;
-        let track_rect = Rect::from_center_size(Pos2::new(rect.center().x, cy), Vec2::new(bar_w, track_h));
-        let painter = ui.painter();
-        painter.rect_filled(
-            track_rect,
-            CornerRadius::same(2),
-            Color32::from_rgba_unmultiplied(255, 255, 255, 42),
-        );
+    ui.allocate_ui_with_layout(
+        Vec2::new(row_w, 16.0 * scale),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            ui.spacing_mut().item_spacing.x = gap;
+            ui.allocate_ui_with_layout(
+                Vec2::new(time_w, 16.0 * scale),
+                egui::Layout::right_to_left(egui::Align::Center),
+                |ui| {
+                    ui.label(
+                        RichText::new(format_mm_ss(clamped_pos))
+                            .font(FontId::monospace(9.5 * scale))
+                            .color(muted),
+                    );
+                },
+            );
 
-        let fill_w = bar_w * frac;
-        if fill_w > 0.5 {
-            let fill_rect = Rect::from_min_size(track_rect.min, Vec2::new(fill_w, track_h));
-            painter.rect_filled(fill_rect, CornerRadius::same(2), accent);
-        }
-        if duration_ms > 0 && (resp.hovered() || resp.dragged()) {
-            painter.circle_filled(Pos2::new(rect.left() + fill_w, cy), 4.5 * scale, accent);
-        }
+            let (rect, resp) = ui.allocate_exact_size(
+                Vec2::new(bar_w, 14.0 * scale),
+                Sense::click_and_drag(),
+            );
+            let cy = rect.center().y;
+            let track_h = 3.5 * scale;
+            let track_rect =
+                Rect::from_center_size(Pos2::new(rect.center().x, cy), Vec2::new(bar_w, track_h));
+            let painter = ui.painter();
+            painter.rect_filled(
+                track_rect,
+                CornerRadius::same(2),
+                Color32::from_rgba_unmultiplied(255, 255, 255, 42),
+            );
 
-        if duration_ms > 0
-            && (resp.clicked() || resp.dragged())
-            && let Some(pointer) = resp.interact_pointer_pos()
-        {
-            let ratio = ((pointer.x - rect.left()) / bar_w).clamp(0.0, 1.0);
-            seek_target = Some((duration_ms as f64 * ratio as f64).round() as u64);
-        }
+            let fill_w = bar_w * frac;
+            if fill_w > 0.5 {
+                let fill_rect = Rect::from_min_size(track_rect.min, Vec2::new(fill_w, track_h));
+                painter.rect_filled(fill_rect, CornerRadius::same(2), accent);
+            }
+            if duration_ms > 0 && (resp.hovered() || resp.dragged()) {
+                painter.circle_filled(Pos2::new(rect.left() + fill_w, cy), 4.5 * scale, accent);
+            }
 
-        ui.label(
-            RichText::new(format_mm_ss(duration_ms))
-                .font(FontId::monospace(9.5 * scale))
-                .color(muted),
-        );
-    });
+            if duration_ms > 0
+                && (resp.clicked() || resp.dragged())
+                && let Some(pointer) = resp.interact_pointer_pos()
+            {
+                let ratio = ((pointer.x - rect.left()) / bar_w).clamp(0.0, 1.0);
+                seek_target = Some((duration_ms as f64 * ratio as f64).round() as u64);
+            }
+
+            ui.allocate_ui_with_layout(
+                Vec2::new(time_w, 16.0 * scale),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    ui.label(
+                        RichText::new(format_mm_ss(duration_ms))
+                            .font(FontId::monospace(9.5 * scale))
+                            .color(muted),
+                    );
+                },
+            );
+        },
+    );
 
     seek_target
 }
@@ -2442,6 +2697,14 @@ fn format_mm_ss(ms: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn truncate_with_ellipsis_fits_budget_and_keeps_short_text() {
+        assert_eq!(truncate_with_ellipsis("short", |t| t.chars().count() <= 8), "short");
+        let cut = truncate_with_ellipsis("a very long song title", |t| t.chars().count() <= 8);
+        assert!(cut.ends_with('…') && cut.chars().count() <= 8, "got: {cut}");
+        assert_eq!(truncate_with_ellipsis("abc", |t| t.is_empty()), "…");
+    }
 
     #[test]
     fn app_brand_color_maps_known_apps_and_falls_back() {

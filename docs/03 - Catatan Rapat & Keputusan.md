@@ -107,3 +107,33 @@ Log *Architecture Decision Records (ADR)* untuk proyek [[00 - Dashboard Proyek]]
   2. **Akurasi Lyric & Romaji Sync:** Mengekstrapolasi `Position` SMTC Windows menggunakan `LastUpdatedTime` (`UniversalTime`) agar posisi awal tidak usang, mencocokkan `duration` di LRCLIB, mempertahankan baris kosong LRC sebagai batas `end_ms` jeda instrumental, menyediakan slider `lyric_offset_ms` (`-5000..=5000`), serta mengganti `render_wrapped_karaoke` ke dual-galley per-baris agar highlight Romaji halus tanpa membelah kata.
   3. **Layout Anti-Overlap & Akses Settings:** Membagi header `render_expanded` menjadi slot kiri/kanan terpisah ber-clip, menjaga panel expanded hanya dirender saat `height >= 95 * scale`, membungkus kolom lirik kanan dengan `ScrollArea::vertical()`, dan memanggil `bring_window_to_front` (`HWND_TOPMOST` -> `HWND_NOTOPMOST` + `SetForegroundWindow`) sambil menjaga root viewport tetap visible selama Settings terbuka.
 - **Konsekuensi:** Tidak ada lagi glitch tombol caption Win32 atau tabrakan widget UI, lirik Romaji tersinkron halus dengan dukungan kalibrasi offset pengguna, dan jendela Settings selalu langsung muncul ke depan ketika tombol `⚙` diklik.
+
+## ADR-011: Fullscreen Notification Pass-Through, Pergantian Mode Khusus Settings, & Presisi Alignment UI
+- **Tanggal:** 2026-11-26
+- **Status:** Accepted
+- **Konteks:** Pengguna meminta agar saat aplikasi fullscreen aktif Dynamic Island tetap sembunyi namun tetap muncul jika ada notifikasi masuk, pergantian mode `Notch` ↔ `Floating Island` dibatasi hanya melalui Settings (bukan di island/tray), serta seluruh ikon dan elemen UI dirapikan perataannya.
+- **Keputusan:**
+  1. **Fullscreen Notification Pass-Through:** `IslandState::should_be_visible` hanya menyembunyikan overlay saat `hide_in_fullscreen && fullscreen_active && active.is_none()`, dan `logic()` memanggil `raise_overlay_topmost` (`HWND_TOPMOST`) tiap kali overlay menjadi visible sehingga popup notifikasi tetap muncul di atas aplikasi borderless fullscreen (dengan toleransi `2 px` di `is_foreground_fullscreen`), lalu kembali tersembunyi setelah notifikasi selesai/di-dismiss.
+  2. **Settings-Only Display Mode Switch:** Menghapus `TrayAction::ToggleDockMode` dan tombol `Island`/`Notch` dari header expanded island; pengguna mengubah mode secara eksklusif dari Settings (`Display Mode`) dengan animasi `notch_morph`.
+  3. **Alignment Konsisten:** Menambahkan `render_icon_button` (`Align2::CENTER_CENTER`), memusatkan idle Clock & Minimal label memakai `LayoutJob`, meratakan vertical galley pada `render_karaoke_line`, menyelaraskan slot ikon overview (`render_overview_summary_row`), playbar (`render_playbar`), kontrol transport, serta baris Todo dan Calendar.
+- **Konsekuensi:** Overlay tidak mengganggu saat menonton video/game fullscreen kecuali saat notifikasi penting masuk, antarmuka header expanded lebih bersih, dan seluruh elemen/ikon rata secara konsisten lintas state.
+
+## ADR-012: Subclass `WM_NCCALCSIZE`, Envelope-Canvas Smooth Animation, & Fullscreen Watcher Thread
+- **Tanggal:** 2026-11-26
+- **Status:** Accepted
+- **Konteks:** Masih terlihat garis hitam tipis `1 px` di atas Dynamic Island, opsi ganti mode di Settings kurang terlihat, animasi hover/perpindahan terasa tersendat karena `InnerSize` + `OuterPosition` dipanggil setiap frame animasi, dan deteksi fullscreen gagal membangunkan window saat overlay sedang tersembunyi (`Visible(false)`).
+- **Keputusan:**
+  1. **Garis Tipis `1 px` (`winit` Hack):** `winit` menambah `params.rgrc[0].top += 1` pada `WM_NCCALCSIZE` untuk `MARKER_UNDECORATED_SHADOW`. `apply_no_activate_hook` kini memasang Win32 subclass `overlay_wndproc` yang mengembalikan `LRESULT(0)` untuk `WM_NCCALCSIZE` (`wparam != 0`), menghilangkan garis tersebut sepenuhnya.
+  2. **Envelope Canvas Smoothness:** Selama `animating || morphing`, ukuran window OS dikunci ke envelope pembungkus (`env_w`, `env_h`, `window_top_y = 0`) tanpa memanggil `InnerSize`/`OuterPosition` tiap frame; pill & isi UI beranimasi penuh `>= 60 FPS` di dalam canvas transparan menggunakan `is_cursor_in_screen_rect` dan `multiply_opacity`, lalu mengecil kembali ke ukuran pas setelah diam.
+  3. **Display Mode & Reliable Fullscreen Watcher:** Menempatkan tombol `Top Notch (Seamless Top)` vs `Floating Dynamic Island` paling atas di Settings Appearance; memindahkan deteksi fullscreen ke thread background `spawn_fullscreen_watcher` (`SHQueryUserNotificationState` + `GetAncestor(GA_ROOT)` + check taskbar/caption) dengan `on_wake()` agar `Visible(false <-> true)` selalu terpanggil meski window sedang tersembunyi.
+- **Konsekuensi:** Garis tipis di atas island hilang total, transisi hover & pindah mode berlangsung mulus tanpa jitter resize Win32, opsi mode langsung terlihat di Settings, dan auto-hide/restore saat fullscreen selalu sinkron.
+
+## ADR-013: Kanvas Permanen + Click-Through Win32 & Direct `ShowWindow` Anti-Style-Wipe
+- **Tanggal:** 2026-11-26
+- **Status:** Accepted
+- **Konteks:** Meskipun memakai envelope canvas selama animasi, memanggil `ViewportCommand::InnerSize`/`OuterPosition` pada frame awal dan akhir buka-tutup tetap menimbulkan lompatan posisi `1–2` frame karena `winit` menerapkan perintah viewport secara asinkron setelah `ui()` selesai. Selain itu, `ViewportCommand::Visible(bool)` di `winit 0.30` memanggil `SetWindowLongW` dari state internalnya (menghapus `WS_EX_NOACTIVATE` & `WS_POPUP`) serta `ShowWindow(SW_SHOW)` yang mencuri fokus foreground dari aplikasi fullscreen sehingga `is_foreground_fullscreen()` gagal. Jendela maximized dengan auto-hide taskbar Windows 11 (`work.bottom` selisih `2 px`) juga sempat salah terdeteksi sebagai fullscreen.
+- **Keputusan:**
+  1. **Permanent Fixed Canvas + Dynamic Click-Through:** Ukuran window root dikunci ke `permanent_canvas_size(config)` pada `y = 0.0` sepanjang waktu tanpa memanggil `InnerSize`/`OuterPosition` saat buka-tutup atau morph; area di luar pill dibuat click-through via `set_overlay_click_through` (`WS_EX_LAYERED | WS_EX_TRANSPARENT`).
+  2. **Direct Win32 Visibility:** Mengganti `ViewportCommand::Visible` di Windows dengan `set_overlay_visible` yang memanggil `ShowWindow(hwnd, SW_HIDE / SW_SHOWNOACTIVATE)` langsung tanpa menyentuh `winit` `apply_diff`.
+  3. **Accurate Fullscreen Bounds:** Menggunakan `DWMWA_EXTENDED_FRAME_BOUNDS` dan ambang batas taskbar `>= 20 px` (`is_rect_covering_monitor_as_fullscreen`) agar jendela maximized biasa tidak memicu auto-hide.
+- **Konsekuensi:** Flicker buka-tutup/morph hilang total, style `WS_EX_NOACTIVATE` dan fokus aplikasi fullscreen tetap terjaga, dan seluruh area di luar pill tetap bisa diklik menembus overlay.

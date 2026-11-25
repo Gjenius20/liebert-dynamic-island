@@ -8,6 +8,27 @@ tags:
 
 # 04 - Changelog & Dev Log
 
+## 2026-11-26
+### Fixed
+- `src/ui/mod.rs`, `src/main.rs`, `src/platform/windows.rs`, `src/platform/mod.rs`: Menghilangkan flicker saat membuka/menutup **Floating Island** dan **Top Notch** dengan kanvas permanen tetap (`permanent_canvas_size` pada `y = 0` tanpa `ViewportCommand::InnerSize`/`OuterPosition` saat animasi) serta toggle click-through Win32 dinamis (`set_overlay_click_through` yang mengatur `WS_EX_LAYERED | WS_EX_TRANSPARENT` di luar area pill).
+- `src/platform/windows.rs`, `src/platform/mod.rs`, `src/ui/mod.rs`: Memperbaiki auto-hide fullscreen agar tidak menghapus style `WS_EX_NOACTIVATE`/`WS_POPUP` dan tidak mencuri fokus foreground (`set_overlay_visible` memanggil `ShowWindow(SW_HIDE / SW_SHOWNOACTIVATE)` langsung, menggantikan `ViewportCommand::Visible`), serta menambahkan `DWMWA_EXTENDED_FRAME_BOUNDS` dan ambang batas taskbar `>= 20 px` (`is_rect_covering_monitor_as_fullscreen`) agar jendela maximized dengan auto-hide taskbar Windows 11 tidak salah terdeteksi sebagai fullscreen.
+- `src/ui/settings.rs`, `src/ui/mod.rs`: Memperbaiki perataan UI dan alur pengetesan: menyamakan lebar penuh tombol `Display Mode` di Settings, memperpendek label checkbox notifikasi agar tombol `"Send Test Notification"` tidak terpotong di lebar jendela `450 px`, serta auto-unpause di `push_test_notification` agar tes popup selalu tampil.
+
+### Changed
+- `src/ui/mod.rs`: Mengganti ikon karakter dengan ikon vektor geometris presisi (`paint_vector_icon` untuk `⚙`, `▶`, `⏸`, `⏮`, `⏭`), menyamakan tinggi tombol/tab header (`24 * scale`), menambahkan `render_dot_label` (dot geometris + centerline teks) untuk mode idle Clock/Minimal, meratakan kotak `♪` pada mode idle Lyrics, serta memusatkan dan memangkas judul/artis Music Card dengan `render_centered_truncated_text` / `truncate_with_ellipsis` (+2 unit test baru di `src/ui/mod.rs` & `src/platform/windows.rs`).
+- `src/ui/settings.rs`: Memindahkan dan mempertegas tombol pilihan **Display Mode** (**Top Notch (Seamless Top)** vs **Floating Dynamic Island**) + `Top Offset (px)` ke paling atas tab Appearance Settings dengan frame aksen aktif agar langsung terlihat dan mudah diakses.
+
+### Fixed
+- `src/platform/windows.rs`: Menambahkan Win32 subclass `overlay_wndproc` (`GWLP_WNDPROC`) yang memotong `WM_NCCALCSIZE` untuk menghilangkan garis tipis `1 px` di atas window borderless `winit`.
+- `Cargo.toml`, `src/platform/windows.rs`, `src/platform/mod.rs`, `src/main.rs`, `src/ui/mod.rs`: Mengaktifkan `Win32_UI_Shell` (`SHQueryUserNotificationState`), `GetAncestor(GA_ROOT)`, serta background thread `spawn_fullscreen_watcher` (`250 ms` + `PlatformEvent::Fullscreen` + `on_wake()`) agar auto-hide/restore saat fullscreen selalu bereaksi meski overlay sedang `Visible(false)`.
+
+### Changed (Earlier)
+- `src/tray.rs`, `src/main.rs`, `src/ui/mod.rs`: Membatasi pergantian mode tampilan (**Top Notch** ↔ **Floating Island**) hanya melalui menu **Settings** (`Display Mode`), menghapus tombol switch mode di header expanded island dan menu system tray.
+- `src/ui/mod.rs`: Merapikan seluruh perataan ikon & elemen antarmuka dengan helper `render_icon_button` (ikon terpusat secara matematis pada `Align2::CENTER_CENTER` untuk `⚙`, kontrol transport musik `🔀`/`⏮`/`▶`/`⏭`/`🔁`, & tombol `×`), `LayoutJob` terpusat untuk clock/minimal idle notch, vertical centering di `render_karaoke_line`, kolom ikon tetap `render_overview_summary_row`, timestamp simetris `render_playbar`, serta baris seragam pada tab Todo dan Calendar.
+
+### Fixed
+- `src/state.rs`, `src/platform/windows.rs`, `src/platform/mod.rs`, `src/ui/mod.rs`: Memperbaiki mode `hide_in_fullscreen` agar menyembunyikan island saat `Idle`, namun tetap memunculkan popup notifikasi ke atas layar (`should_be_visible` mengecek `self.active.is_none()`, `raise_overlay_topmost` memanggil `SetWindowPos(HWND_TOPMOST)` saat tampil, serta toleransi `2 px` pada deteksi fullscreen borderless), lalu kembali bersembunyi setelah notifikasi ditutup.
+
 ## 2026-11-25
 ### Fixed
 - `Cargo.toml`, `Cargo.lock`: Mengganti `tray-icon` ke `default-features = false, features = ["ksni"]` untuk mengatasi panic startup di Linux/Hyprland (`GTK has not been initialized. Call gtk::init first`) sekaligus menghilangkan ketergantungan runtime GTK3/libappindicator. Lihat [[03 - Catatan Rapat & Keputusan]].

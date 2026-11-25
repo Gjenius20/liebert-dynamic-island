@@ -6,7 +6,6 @@ use crate::state::ListenerStatus;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrayAction {
     OpenSettings,
-    ToggleDockMode,
     TestNotification,
     TogglePause,
     ToggleAutoHide,
@@ -17,7 +16,6 @@ pub struct TrayController {
     _tray: TrayIcon,
     status_item: MenuItem,
     settings_item: MenuItem,
-    dock_mode_item: MenuItem,
     test_notif_item: MenuItem,
     pause_item: MenuItem,
     auto_hide_item: CheckMenuItem,
@@ -25,11 +23,10 @@ pub struct TrayController {
 }
 
 impl TrayController {
-    pub fn new(auto_hide: bool, notch_dock_mode: bool) -> Result<Self, String> {
+    pub fn new(auto_hide: bool) -> Result<Self, String> {
         let menu = Menu::new();
         let status_item = MenuItem::new("Status: Starting...", false, None);
         let settings_item = MenuItem::new("Settings...", true, None);
-        let dock_mode_item = MenuItem::new(dock_mode_label(notch_dock_mode), true, None);
         let test_notif_item = MenuItem::new("Test Notification Popup", true, None);
         let pause_item = MenuItem::new("Pause Notifications", true, None);
         let auto_hide_item = CheckMenuItem::new("Auto-hide when idle", true, auto_hide, None);
@@ -39,7 +36,6 @@ impl TrayController {
             &status_item,
             &PredefinedMenuItem::separator(),
             &settings_item,
-            &dock_mode_item,
             &test_notif_item,
             &pause_item,
             &auto_hide_item,
@@ -60,7 +56,6 @@ impl TrayController {
             _tray: tray,
             status_item,
             settings_item,
-            dock_mode_item,
             test_notif_item,
             pause_item,
             auto_hide_item,
@@ -73,8 +68,6 @@ impl TrayController {
         while let Ok(event) = MenuEvent::receiver().try_recv() {
             if event.id == *self.settings_item.id() {
                 actions.push(TrayAction::OpenSettings);
-            } else if event.id == *self.dock_mode_item.id() {
-                actions.push(TrayAction::ToggleDockMode);
             } else if event.id == *self.test_notif_item.id() {
                 actions.push(TrayAction::TestNotification);
             } else if event.id == *self.pause_item.id() {
@@ -96,10 +89,6 @@ impl TrayController {
         self.auto_hide_item.set_checked(checked);
     }
 
-    pub fn update_dock_mode(&self, notch_dock_mode: bool) {
-        self.dock_mode_item.set_text(dock_mode_label(notch_dock_mode));
-    }
-
     pub fn update_status(&self, status: &ListenerStatus, paused: bool) {
         let label = match status {
             ListenerStatus::Starting => "Status: Starting...",
@@ -114,14 +103,6 @@ impl TrayController {
         } else {
             "Pause Notifications"
         });
-    }
-}
-
-fn dock_mode_label(notch_dock_mode: bool) -> &'static str {
-    if notch_dock_mode {
-        "Switch to Floating Island"
-    } else {
-        "Switch to Top Notch"
     }
 }
 

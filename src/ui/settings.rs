@@ -106,6 +106,57 @@ fn render_appearance_tab(
 ) {
     let mut changed = false;
 
+    ui.label(RichText::new("Display Mode (Notch / Dynamic Island)").strong());
+    ui.horizontal(|ui| {
+        let btn_w = ((ui.available_width() - ui.spacing().item_spacing.x) * 0.5).max(140.0);
+        for (is_notch, label) in [
+            (true, "Top Notch (Seamless Top)"),
+            (false, "Floating Dynamic Island"),
+        ] {
+            let selected = config.notch_dock_mode == is_notch;
+            let fill = if selected {
+                Color32::from_rgba_unmultiplied(224, 92, 98, 70)
+            } else {
+                Color32::from_rgb(32, 32, 38)
+            };
+            let stroke = if selected {
+                Stroke::new(1.5, Color32::from_rgb(224, 92, 98))
+            } else {
+                Stroke::new(1.0, Color32::from_rgb(65, 65, 76))
+            };
+            let text_col = if selected {
+                Color32::WHITE
+            } else {
+                Color32::from_rgb(185, 185, 195)
+            };
+            let btn = egui::Button::new(RichText::new(label).color(text_col).strong())
+                .min_size(egui::vec2(btn_w, 30.0))
+                .fill(fill)
+                .stroke(stroke)
+                .corner_radius(CornerRadius::same(8));
+            if ui.add(btn).clicked() && !selected {
+                config.notch_dock_mode = is_notch;
+                changed = true;
+            }
+        }
+    });
+    ui.label(
+        RichText::new(if config.notch_dock_mode {
+            "Notch menempel di tepi atas monitor"
+        } else {
+            "Floating pill dengan jarak Top Offset"
+        })
+        .small()
+        .color(Color32::GRAY),
+    );
+    changed |= ui
+        .add_enabled(
+            !config.notch_dock_mode,
+            egui::Slider::new(&mut config.top_offset_px, 0.0..=60.0).text("Top Offset (px)"),
+        )
+        .changed();
+
+    ui.add_space(8.0);
     ui.label(RichText::new("Theme Presets").strong());
     ui.horizontal(|ui| {
         for (id, label) in [
@@ -132,21 +183,6 @@ fn render_appearance_tab(
         .changed();
     changed |= ui
         .add(egui::Slider::new(&mut config.expanded_width, 320.0..=520.0).text("Expanded Width (px)"))
-        .changed();
-    ui.horizontal(|ui| {
-        ui.label("Display Mode:");
-        changed |= ui
-            .selectable_value(&mut config.notch_dock_mode, true, "Top Notch")
-            .changed();
-        changed |= ui
-            .selectable_value(&mut config.notch_dock_mode, false, "Floating Island")
-            .changed();
-    });
-    changed |= ui
-        .add_enabled(
-            !config.notch_dock_mode,
-            egui::Slider::new(&mut config.top_offset_px, 0.0..=60.0).text("Top Offset (px)"),
-        )
         .changed();
     changed |= ui
         .add(egui::Slider::new(&mut config.corner_radius, 8..=28).text("Corner Radius"))
@@ -290,15 +326,17 @@ fn render_appearance_tab(
         .changed();
     ui.horizontal(|ui| {
         changed |= ui
-            .checkbox(
-                &mut config.show_notifications,
-                "Show notification popups (WhatsApp, Discord, Browser, Gmail, ...)",
-            )
+            .checkbox(&mut config.show_notifications, "Show notification popups")
             .changed();
-        if ui.button("Test Popup").clicked() {
+        if ui.button("Send Test Notification").clicked() {
             *test_notification_requested = true;
         }
     });
+    ui.label(
+        RichText::new("Supports WhatsApp, Discord, Browser, Gmail, and Windows toasts")
+            .small()
+            .color(Color32::GRAY),
+    );
     changed |= ui
         .checkbox(&mut config.show_lyrics, "Show Music & Synced Lyrics")
         .changed();
