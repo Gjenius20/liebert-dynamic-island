@@ -5,6 +5,7 @@ use eframe::egui::{self, Color32, RichText, ViewportBuilder, ViewportId};
 use crate::calendar::{CalendarCommand, CalendarEvent, format_countdown, format_local_time, upcoming_events};
 use crate::clock::{COMMON_TIMEZONES, format_clock, is_valid_timezone};
 use crate::config::{Config, IdleDisplayMode};
+use crate::lyrics::TRANSLATE_LANGUAGES;
 use crate::todo::TodoStore;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,6 +79,7 @@ fn render_appearance_tab(ui: &mut egui::Ui, config: &mut Config, config_dirty: &
     ui.label(RichText::new("Theme Presets").strong());
     ui.horizontal(|ui| {
         for (id, label) in [
+            ("crimson", "Crimson"),
             ("obsidian", "Obsidian"),
             ("midnight", "Midnight"),
             ("amoled", "AMOLED"),
@@ -247,6 +249,50 @@ fn render_appearance_tab(ui: &mut egui::Ui, config: &mut Config, config_dirty: &
     changed |= ui
         .checkbox(&mut config.show_lyrics, "Show Music & Synced Lyrics")
         .changed();
+    if config.show_lyrics {
+        ui.indent("lyrics_sub_opts", |ui| {
+            changed |= ui
+                .checkbox(
+                    &mut config.dynamic_album_color,
+                    "Dynamic accent & glow from album art",
+                )
+                .changed();
+            changed |= ui
+                .checkbox(&mut config.karaoke_lyrics, "Karaoke highlight")
+                .changed();
+            changed |= ui
+                .checkbox(&mut config.romaji_lyrics, "Romaji for non-Latin lyrics")
+                .changed();
+            ui.horizontal(|ui| {
+                changed |= ui
+                    .checkbox(&mut config.translate_lyrics, "Translate lyrics to:")
+                    .changed();
+                ui.add_enabled_ui(config.translate_lyrics, |ui| {
+                    let selected_lang = TRANSLATE_LANGUAGES
+                        .iter()
+                        .find(|(code, _)| *code == config.lyric_translate_lang)
+                        .map(|(_, name)| *name)
+                        .unwrap_or(config.lyric_translate_lang.as_str());
+                    egui::ComboBox::from_id_salt("lyric_translate_lang")
+                        .selected_text(selected_lang)
+                        .show_ui(ui, |ui| {
+                            for (code, name) in TRANSLATE_LANGUAGES {
+                                if ui
+                                    .selectable_label(
+                                        config.lyric_translate_lang == *code,
+                                        format!("{name} ({code})"),
+                                    )
+                                    .clicked()
+                                {
+                                    config.lyric_translate_lang = (*code).to_owned();
+                                    changed = true;
+                                }
+                            }
+                        });
+                });
+            });
+        });
+    }
     changed |= ui
         .checkbox(&mut config.show_todo, "Show Todo List tab")
         .changed();

@@ -73,6 +73,7 @@ fn main() -> ExitCode {
         WINDOW_TITLE,
         options,
         Box::new(move |cc| {
+            ui::install_base_fallback_fonts(&cc.egui_ctx);
             let egui_ctx = cc.egui_ctx.clone();
             let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || egui_ctx.request_repaint());
 

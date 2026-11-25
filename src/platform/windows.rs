@@ -7,6 +7,8 @@ use windows::Media::Control::{
     GlobalSystemMediaTransportControlsSessionManager,
     GlobalSystemMediaTransportControlsSessionPlaybackStatus,
 };
+use windows::Media::MediaPlaybackAutoRepeatMode;
+use windows::Storage::Streams::DataReader;
 use windows::UI::Notifications::Management::{
     UserNotificationListener, UserNotificationListenerAccessStatus,
 };
@@ -27,7 +29,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::HSTRING;
 
-use crate::platform::{MediaCommand, MediaTrack, PlatformEvent};
+use crate::platform::{
+    AlbumArt, MediaCommand, MediaTrack, PlatformEvent, RepeatMode, decode_album_art,
+};
 use crate::state::{ListenerStatus, NotificationItem};
 
 fn init_com_mta() {
@@ -272,15 +276,18 @@ pub fn spawn_media_listener(
                 return;
             };
 
-            let mut last_snapshot: Option<(String, String, bool, u64)> = None;
+            let mut last_snapshot: Option<(String, String, bool, u64, bool, RepeatMode)> = None;
+            let mut cached_art: Option<((String, String), Option<AlbumArt>)> = None;
             loop {
-                let current = read_smtc_track(&manager);
+                let current = read_smtc_track(&manager, &mut cached_art);
                 let snapshot = current.as_ref().map(|t| {
                     (
                         t.title.clone(),
                         t.artist.clone(),
                         t.is_playing,
                         t.position_ms / 1000,
+                        t.shuffle,
+                        t.repeat,
                     )
                 });
                 if snapshot != last_snapshot {
@@ -302,6 +309,21 @@ pub fn spawn_media_listener(
                                 MediaCommand::Previous => {
                                     let _ = session.TrySkipPreviousAsync();
                                 }
+                                MediaCommand::SetShuffle(shuffle) => {
+                                    let _ = session.TryChangeShuffleActiveAsync(shuffle);
+                                }
+                                MediaCommand::SetRepeat(mode) => {
+                                    let win_mode = match mode {
+                                        RepeatMode::Off => MediaPlaybackAutoRepeatMode::None,
+                                        RepeatMode::All => MediaPlaybackAutoRepeatMode::List,
+                                        RepeatMode::One => MediaPlaybackAutoRepeatMode::Track,
+                                    };
+                                    let _ = session.TryChangeAutoRepeatModeAsync(win_mode);
+                                }
+                                MediaCommand::SeekMs(ms) => {
+                                    let ticks = (ms as i64).saturating_mul(10_000);
+                                    let _ = session.TryChangePlaybackPositionAsync(ticks);
+                                }
                             }
                         }
                         last_snapshot = None;
@@ -316,6 +338,7 @@ pub fn spawn_media_listener(
 
 fn read_smtc_track(
     manager: &GlobalSystemMediaTransportControlsSessionManager,
+    cached_art: &mut Option<((String, String), Option<AlbumArt>)>,
 ) -> Option<MediaTrack> {
     let session = manager.GetCurrentSession().ok()?;
     let props = session.TryGetMediaPropertiesAsync().ok()?.join().ok()?;
@@ -328,11 +351,37 @@ fn read_smtc_track(
         .map(|s| s.to_string().trim().to_owned())
         .unwrap_or_default();
 
-    let is_playing = session
-        .GetPlaybackInfo()
-        .and_then(|info| info.PlaybackStatus())
-        .map(|s| s == GlobalSystemMediaTransportControlsSessionPlaybackStatus::Playing)
+    let key = (title.clone(), artist.clone());
+    let album_art = if let Some((cached_key, art)) = cached_art.as_ref()
+        && *cached_key == key
+    {
+        art.clone()
+    } else {
+        let art = read_smtc_thumbnail(&props);
+        *cached_art = Some((key, art.clone()));
+        art
+    };
+
+    let playback = session.GetPlaybackInfo().ok();
+    let is_playing = playback
+        .as_ref()
+        .and_then(|info| info.PlaybackStatus().ok())
+        .is_some_and(|s| s == GlobalSystemMediaTransportControlsSessionPlaybackStatus::Playing);
+    let shuffle = playback
+        .as_ref()
+        .and_then(|info| info.IsShuffleActive().ok())
+        .and_then(|r| r.Value().ok())
         .unwrap_or(false);
+    let repeat = playback
+        .as_ref()
+        .and_then(|info| info.AutoRepeatMode().ok())
+        .and_then(|r| r.Value().ok())
+        .map(|m| match m {
+            MediaPlaybackAutoRepeatMode::Track => RepeatMode::One,
+            MediaPlaybackAutoRepeatMode::List => RepeatMode::All,
+            _ => RepeatMode::Off,
+        })
+        .unwrap_or(RepeatMode::Off);
 
     let (position_ms, duration_ms) = session
         .GetTimelineProperties()
@@ -355,8 +404,30 @@ fn read_smtc_track(
         is_playing,
         position_ms,
         duration_ms,
+        shuffle,
+        repeat,
+        album_art,
         updated_at: Instant::now(),
     })
+}
+
+fn read_smtc_thumbnail(
+    props: &windows::Media::Control::GlobalSystemMediaTransportControlsSessionMediaProperties,
+) -> Option<AlbumArt> {
+    let thumb_ref = props.Thumbnail().ok()?;
+    let stream = thumb_ref.OpenReadAsync().ok()?.join().ok()?;
+    let size = stream.Size().ok()? as usize;
+    if size == 0 || size > 4 * 1024 * 1024 {
+        return None;
+    }
+    let reader = DataReader::CreateDataReader(&stream).ok()?;
+    let loaded = reader.LoadAsync(size as u32).ok()?.join().ok()? as usize;
+    if loaded == 0 {
+        return None;
+    }
+    let mut buf = vec![0u8; loaded];
+    reader.ReadBytes(&mut buf).ok()?;
+    decode_album_art(&buf)
 }
 
 pub fn primary_monitor_logical_width() -> f32 {
