@@ -66,6 +66,8 @@ pub struct Config {
     pub show_notifications: bool,
     pub show_lyrics: bool,
     pub dynamic_album_color: bool,
+    pub compact_album_gradient: bool,
+    pub show_pill_translation: bool,
     pub karaoke_lyrics: bool,
     pub karaoke_lyric_mode: KaraokeLyricMode,
     pub romaji_lyrics: bool,
@@ -101,6 +103,8 @@ impl Default for Config {
             show_notifications: true,
             show_lyrics: true,
             dynamic_album_color: true,
+            compact_album_gradient: true,
+            show_pill_translation: true,
             karaoke_lyrics: true,
             karaoke_lyric_mode: KaraokeLyricMode::Original,
             romaji_lyrics: true,
@@ -208,7 +212,9 @@ mod tests {
         assert_eq!(cfg.idle_display, IdleDisplayMode::Auto);
         assert_eq!(cfg.clock_timezone, "Local");
         assert!(cfg.show_notifications && cfg.show_lyrics && cfg.show_todo && cfg.show_calendar);
-        assert!(cfg.dynamic_album_color);
+        assert!(
+            cfg.dynamic_album_color && cfg.compact_album_gradient && cfg.show_pill_translation
+        );
         assert!(cfg.karaoke_lyrics && cfg.romaji_lyrics && cfg.translate_lyrics);
         assert_eq!(cfg.karaoke_lyric_mode, KaraokeLyricMode::Original);
         assert_eq!(cfg.lyric_translate_lang, "id");
@@ -222,6 +228,8 @@ mod tests {
             auto_hide_delay_secs: 12,
             hide_in_fullscreen: false,
             show_notifications: false,
+            compact_album_gradient: false,
+            show_pill_translation: false,
             karaoke_lyrics: false,
             karaoke_lyric_mode: KaraokeLyricMode::Romaji,
             romaji_lyrics: false,

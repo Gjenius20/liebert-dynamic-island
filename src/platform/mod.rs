@@ -163,6 +163,9 @@ mod windows;
 #[cfg(target_os = "linux")]
 mod linux;
 
+#[cfg(target_os = "linux")]
+pub mod wayland_layer;
+
 pub fn spawn_listener(tx: mpsc::Sender<PlatformEvent>, on_wake: Arc<dyn Fn() + Send + Sync>) {
     #[cfg(windows)]
     windows::spawn_listener(tx, on_wake);
@@ -243,15 +246,29 @@ pub fn prepare_overlay_rules(window_title: &str, top_offset_px: f32) {
     let _ = (window_title, top_offset_px);
 }
 
-pub fn apply_overlay_window_setup(window_title: &str) {
+pub fn apply_overlay_window_setup(window_title: &str) -> bool {
     #[cfg(windows)]
-    windows::apply_no_activate_hook(window_title);
+    {
+        windows::apply_no_activate_hook(window_title);
+        return true;
+    }
 
     #[cfg(target_os = "linux")]
-    linux::apply_no_activate_hook(window_title);
+    return linux::apply_no_activate_hook(window_title);
 
     #[cfg(not(any(windows, target_os = "linux")))]
-    let _ = window_title;
+    {
+        let _ = window_title;
+        true
+    }
+}
+
+pub fn ensure_overlay_topmost(window_title: &str, force: bool) {
+    #[cfg(target_os = "linux")]
+    linux::ensure_overlay_topmost(window_title, force);
+
+    #[cfg(not(target_os = "linux"))]
+    let _ = (window_title, force);
 }
 
 pub fn sync_overlay_window(
