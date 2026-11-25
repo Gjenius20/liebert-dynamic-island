@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::mpsc;
 
 use eframe::egui::{self, Color32, CornerRadius, RichText, Stroke, Vec2, ViewportBuilder, ViewportId};
@@ -42,6 +43,7 @@ pub fn render_settings_viewport(ctx: &egui::Context, st: SettingsWindowState<'_>
         ViewportId::from_hash_of("liebert_settings"),
         ViewportBuilder::default()
             .with_title(SETTINGS_WINDOW_TITLE)
+            .with_app_id("liebert-dynamic-island-settings")
             .with_inner_size([450.0, 540.0])
             .with_active(true)
             .with_resizable(true),
@@ -66,38 +68,183 @@ pub fn render_settings_viewport(ctx: &egui::Context, st: SettingsWindowState<'_>
                 .inner_margin(egui::Margin::same(14));
 
             egui::CentralPanel::default().frame(panel_frame).show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.selectable_value(st.tab, SettingsTab::Appearance, "Appearance");
-                    ui.selectable_value(st.tab, SettingsTab::Todo, "Todo List");
-                    ui.selectable_value(st.tab, SettingsTab::Calendar, "Google Calendar");
-                });
-                ui.add_space(4.0);
-                ui.separator();
-                ui.add_space(4.0);
-
-                egui::ScrollArea::vertical().show(ui, |ui| match *st.tab {
-                    SettingsTab::Appearance => render_appearance_tab(
-                        ui,
-                        st.config,
-                        st.config_dirty,
-                        st.test_notification_requested,
-                    ),
-                    SettingsTab::Todo => {
-                        render_todo_tab(ui, st.todos, st.new_todo_input);
-                    }
-                    SettingsTab::Calendar => render_calendar_tab(
-                        ui,
-                        st.config,
-                        st.calendar_url_input,
-                        st.calendar_events,
-                        st.calendar_status,
-                        st.calendar_cmd_tx,
-                        st.config_dirty,
-                    ),
+                render_settings_tabs_body(ui, &mut SettingsBodyState {
+                    tab: st.tab,
+                    config: st.config,
+                    todos: st.todos,
+                    new_todo_input: st.new_todo_input,
+                    calendar_url_input: st.calendar_url_input,
+                    calendar_events: st.calendar_events,
+                    calendar_status: st.calendar_status,
+                    calendar_cmd_tx: Some(st.calendar_cmd_tx),
+                    config_dirty: st.config_dirty,
+                    todos_dirty: &mut false,
+                    test_notification_requested: st.test_notification_requested,
+                    calendar_set_url_requested: &mut None,
+                    calendar_refresh_requested: &mut false,
                 });
             });
         },
     );
+}
+
+struct SettingsBodyState<'a> {
+    tab: &'a mut SettingsTab,
+    config: &'a mut Config,
+    todos: &'a mut TodoStore,
+    new_todo_input: &'a mut String,
+    calendar_url_input: &'a mut String,
+    calendar_events: &'a [CalendarEvent],
+    calendar_status: &'a str,
+    calendar_cmd_tx: Option<&'a mpsc::Sender<CalendarCommand>>,
+    config_dirty: &'a mut bool,
+    todos_dirty: &'a mut bool,
+    test_notification_requested: &'a mut bool,
+    calendar_set_url_requested: &'a mut Option<String>,
+    calendar_refresh_requested: &'a mut bool,
+}
+
+fn render_settings_tabs_body(ui: &mut egui::Ui, st: &mut SettingsBodyState<'_>) {
+    ui.horizontal(|ui| {
+        ui.selectable_value(st.tab, SettingsTab::Appearance, "Appearance");
+        ui.selectable_value(st.tab, SettingsTab::Todo, "Todo List");
+        ui.selectable_value(st.tab, SettingsTab::Calendar, "Google Calendar");
+    });
+    ui.add_space(4.0);
+    ui.separator();
+    ui.add_space(4.0);
+
+    egui::ScrollArea::vertical().show(ui, |ui| match *st.tab {
+        SettingsTab::Appearance => render_appearance_tab(
+            ui,
+            st.config,
+            st.config_dirty,
+            st.test_notification_requested,
+        ),
+        SettingsTab::Todo => {
+            *st.todos_dirty |= render_todo_tab(ui, st.todos, st.new_todo_input);
+        }
+        SettingsTab::Calendar => render_calendar_tab(ui, st),
+    });
+}
+
+#[cfg(target_os = "linux")]
+pub fn run_standalone_settings(ipc_sock: Option<PathBuf>) -> Result<(), String> {
+    use std::io::Write;
+    use std::os::unix::net::UnixStream;
+
+    let config = Config::load();
+    let calendar_url_input = config.google_calendar_ics_url.clone();
+    let todos = TodoStore::load();
+
+    struct StandaloneSettingsApp {
+        tab: SettingsTab,
+        config: Config,
+        todos: TodoStore,
+        new_todo_input: String,
+        calendar_url_input: String,
+        ipc_sock: Option<PathBuf>,
+    }
+
+    impl StandaloneSettingsApp {
+        fn notify(&self, line: &str) {
+            let Some(path) = &self.ipc_sock else {
+                return;
+            };
+            if let Ok(mut stream) = UnixStream::connect(path) {
+                let _ = stream.write_all(line.as_bytes());
+                let _ = stream.write_all(b"\n");
+            }
+        }
+    }
+
+    impl eframe::App for StandaloneSettingsApp {
+        fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+            apply_settings_theme(ui);
+            let panel_frame = egui::Frame::new()
+                .fill(Color32::from_rgb(19, 19, 23))
+                .inner_margin(egui::Margin::same(14));
+
+            let mut config_dirty = false;
+            let mut todos_dirty = false;
+            let mut test_notif = false;
+            let mut cal_set_url = None;
+            let mut cal_refresh = false;
+            let cal_status = if self.config.google_calendar_ics_url.is_empty() {
+                "Not configured"
+            } else {
+                "Configured (synced in overlay)"
+            };
+
+            egui::CentralPanel::default().frame(panel_frame).show(ui, |ui| {
+                render_settings_tabs_body(
+                    ui,
+                    &mut SettingsBodyState {
+                        tab: &mut self.tab,
+                        config: &mut self.config,
+                        todos: &mut self.todos,
+                        new_todo_input: &mut self.new_todo_input,
+                        calendar_url_input: &mut self.calendar_url_input,
+                        calendar_events: &[],
+                        calendar_status: cal_status,
+                        calendar_cmd_tx: None,
+                        config_dirty: &mut config_dirty,
+                        todos_dirty: &mut todos_dirty,
+                        test_notification_requested: &mut test_notif,
+                        calendar_set_url_requested: &mut cal_set_url,
+                        calendar_refresh_requested: &mut cal_refresh,
+                    },
+                );
+            });
+
+            if config_dirty {
+                if let Err(err) = self.config.save() {
+                    eprintln!("Failed to save config: {err}");
+                } else {
+                    self.notify("config");
+                }
+            }
+            if todos_dirty {
+                self.notify("todos");
+            }
+            if test_notif {
+                self.notify("test_notif");
+            }
+            if let Some(url) = cal_set_url {
+                self.notify(&format!("cal_url:{url}"));
+            }
+            if cal_refresh {
+                self.notify("cal_refresh");
+            }
+        }
+    }
+
+    let options = eframe::NativeOptions {
+        renderer: eframe::Renderer::Glow,
+        viewport: ViewportBuilder::default()
+            .with_title(SETTINGS_WINDOW_TITLE)
+            .with_app_id("liebert-dynamic-island-settings")
+            .with_inner_size([450.0, 540.0])
+            .with_resizable(true),
+        ..Default::default()
+    };
+
+    eframe::run_native(
+        SETTINGS_WINDOW_TITLE,
+        options,
+        Box::new(move |cc| {
+            crate::ui::install_base_fallback_fonts(&cc.egui_ctx);
+            Ok(Box::new(StandaloneSettingsApp {
+                tab: SettingsTab::Appearance,
+                config,
+                todos,
+                new_todo_input: String::new(),
+                calendar_url_input,
+                ipc_sock,
+            }))
+        }),
+    )
+    .map_err(|e| e.to_string())
 }
 
 fn render_appearance_tab(
@@ -313,6 +460,12 @@ fn render_appearance_tab(
                 )
                 .changed();
             changed |= ui
+                .checkbox(
+                    &mut config.compact_album_gradient,
+                    "Album color gradient in Compact/Idle pill (#000 -> album)",
+                )
+                .changed();
+            changed |= ui
                 .checkbox(&mut config.karaoke_lyrics, "Karaoke highlight")
                 .changed();
             ui.horizontal(|ui| {
@@ -373,6 +526,15 @@ fn render_appearance_tab(
                         });
                 });
             });
+            changed |= ui
+                .add_enabled(
+                    config.translate_lyrics,
+                    egui::Checkbox::new(
+                        &mut config.show_pill_translation,
+                        "Show translation below lyrics in Idle/Compact pill",
+                    ),
+                )
+                .changed();
         });
     }
     changed |= ui
@@ -396,7 +558,7 @@ fn render_appearance_tab(
     }
 }
 
-fn render_todo_tab(ui: &mut egui::Ui, todos: &mut TodoStore, new_todo_input: &mut String) {
+fn render_todo_tab(ui: &mut egui::Ui, todos: &mut TodoStore, new_todo_input: &mut String) -> bool {
     let mut dirty = false;
     ui.label(RichText::new("Add Task").strong());
     ui.horizontal(|ui| {
@@ -462,6 +624,7 @@ fn render_todo_tab(ui: &mut egui::Ui, todos: &mut TodoStore, new_todo_input: &mu
     if dirty && let Err(err) = todos.save() {
         eprintln!("Failed to save todos: {err}");
     }
+    dirty
 }
 
 fn apply_settings_theme(ui: &mut egui::Ui) {
@@ -481,15 +644,7 @@ fn apply_settings_theme(ui: &mut egui::Ui) {
     style.spacing.item_spacing = egui::vec2(8.0, 6.0);
 }
 
-fn render_calendar_tab(
-    ui: &mut egui::Ui,
-    config: &mut Config,
-    url_input: &mut String,
-    events: &[CalendarEvent],
-    status: &str,
-    cmd_tx: &mpsc::Sender<CalendarCommand>,
-    config_dirty: &mut bool,
-) {
+fn render_calendar_tab(ui: &mut egui::Ui, st: &mut SettingsBodyState<'_>) {
     ui.label(RichText::new("Google Calendar Secret iCal URL (.ics)").strong());
     ui.label(
         RichText::new("Google Calendar > Settings > [Your Calendar] > Secret address in iCal format")
@@ -498,23 +653,31 @@ fn render_calendar_tab(
     );
     ui.add_space(4.0);
     ui.add(
-        egui::TextEdit::singleline(url_input)
+        egui::TextEdit::singleline(st.calendar_url_input)
             .hint_text("https://calendar.google.com/calendar/ical/.../basic.ics")
             .desired_width(f32::INFINITY),
     );
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         if ui.button("Save & Sync").clicked() {
-            config.google_calendar_ics_url = url_input.trim().to_owned();
-            *config_dirty = true;
-            let _ = cmd_tx.send(CalendarCommand::SetUrl(
-                config.google_calendar_ics_url.clone(),
-            ));
+            st.config.google_calendar_ics_url = st.calendar_url_input.trim().to_owned();
+            *st.config_dirty = true;
+            if let Some(tx) = st.calendar_cmd_tx {
+                let _ = tx.send(CalendarCommand::SetUrl(
+                    st.config.google_calendar_ics_url.clone(),
+                ));
+            } else {
+                *st.calendar_set_url_requested = Some(st.config.google_calendar_ics_url.clone());
+            }
         }
         if ui.button("Refresh Now").clicked() {
-            let _ = cmd_tx.send(CalendarCommand::Refresh);
+            if let Some(tx) = st.calendar_cmd_tx {
+                let _ = tx.send(CalendarCommand::Refresh);
+            } else {
+                *st.calendar_refresh_requested = true;
+            }
         }
-        ui.label(RichText::new(status).small());
+        ui.label(RichText::new(st.calendar_status).small());
     });
 
     ui.add_space(10.0);
@@ -522,7 +685,7 @@ fn render_calendar_tab(
     ui.separator();
 
     let now_utc = chrono::Utc::now().timestamp();
-    let upcoming = upcoming_events(events, now_utc, 8);
+    let upcoming = upcoming_events(st.calendar_events, now_utc, 8);
     if upcoming.is_empty() {
         ui.label(RichText::new("No upcoming events loaded.").color(Color32::GRAY));
     } else {

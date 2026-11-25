@@ -29,6 +29,7 @@ struct MonitorInfo {
 struct LinuxOverlayCache {
     monitor: Option<(Instant, MonitorInfo)>,
     last_geometry: Option<(i32, i32, i32, i32)>,
+    last_topmost_sync: Option<Instant>,
     last_hover_probe: Option<(Instant, bool)>,
     last_trigger_probe: Option<(Instant, bool)>,
 }
@@ -39,6 +40,7 @@ fn overlay_cache() -> &'static Mutex<LinuxOverlayCache> {
         Mutex::new(LinuxOverlayCache {
             monitor: None,
             last_geometry: None,
+            last_topmost_sync: None,
             last_hover_probe: None,
             last_trigger_probe: None,
         })
@@ -58,7 +60,7 @@ fn hypr_socket_path() -> Option<PathBuf> {
 fn hypr_ipc(cmd: &str) -> Option<String> {
     let sock_path = hypr_socket_path()?;
     let mut stream = UnixStream::connect(sock_path).ok()?;
-    let timeout = Some(Duration::from_millis(50));
+    let timeout = Some(Duration::from_millis(100));
     let _ = stream.set_read_timeout(timeout);
     let _ = stream.set_write_timeout(timeout);
     stream.write_all(cmd.as_bytes()).ok()?;
@@ -68,7 +70,7 @@ fn hypr_ipc(cmd: &str) -> Option<String> {
 }
 
 fn hypr_eval_or_fallback(lua: &str, legacy_cmd: &str) {
-    if let Some(resp) = hypr_ipc(&format!("eval {lua}"))
+    if let Some(resp) = hypr_ipc(&format!("/eval {lua}"))
         && resp.trim() == "ok"
     {
         return;
@@ -129,6 +131,20 @@ pub fn primary_monitor_logical_width(_pixels_per_point: f32) -> f32 {
     1920.0
 }
 
+pub fn prepare_layer_shell_rules(namespace: &str) {
+    if hypr_socket_path().is_none() {
+        return;
+    }
+    let escaped = escape_lua_str(namespace);
+    let lua = format!(
+        "hl.layer_rule({{name=\"liebert-dynamic-island-layer\", match={{namespace=\"^{escaped}$\"}}, no_anim=true, blur=false, above_lock=false, order=-1}})"
+    );
+    let legacy = format!(
+        "[[BATCH]]/keyword layerrule noanim,^({namespace})$ ; /keyword layerrule order -1,^({namespace})$"
+    );
+    hypr_eval_or_fallback(&lua, &legacy);
+}
+
 pub fn prepare_overlay_rules(window_title: &str, top_offset_px: f32) {
     if hypr_socket_path().is_none() {
         return;
@@ -136,26 +152,80 @@ pub fn prepare_overlay_rules(window_title: &str, top_offset_px: f32) {
     let y = top_offset_px.round() as i32;
     let escaped = escape_lua_str(window_title);
     let lua = format!(
-        "hl.window_rule({{match={{title=\"^{escaped}$\"}}, float=true, pin=true, no_initial_focus=true, no_blur=true, no_shadow=true, border_size=0, no_anim=true, move={{\"(monitor_w*0.5-window_w*0.5)\", \"{y}\"}}}})"
+        "hl.window_rule({{name=\"liebert-dynamic-island\", match={{class=\"^liebert-dynamic-island$\"}}, float=true, pin=true, no_initial_focus=true, no_blur=true, no_shadow=true, no_dim=true, no_glow=true, no_wobble=true, no_anim=true, decorate=false, border_size=0, rounding=0, move=\"(monitor_w*0.5-window_w*0.5) {y}\"}}); hl.window_rule({{name=\"liebert-dynamic-island-title\", match={{title=\"^{escaped}$\"}}, float=true, pin=true, no_initial_focus=true, no_blur=true, no_shadow=true, no_dim=true, no_glow=true, no_wobble=true, no_anim=true, decorate=false, border_size=0, rounding=0, move=\"(monitor_w*0.5-window_w*0.5) {y}\"}})"
     );
     let legacy = format!(
-        "[[BATCH]]keyword windowrulev2 float,title:^({window_title})$ ; keyword windowrulev2 pin,title:^({window_title})$ ; keyword windowrulev2 noinitialfocus,title:^({window_title})$ ; keyword windowrulev2 noborder,title:^({window_title})$ ; keyword windowrulev2 noshadow,title:^({window_title})$ ; keyword windowrulev2 noblur,title:^({window_title})$ ; keyword windowrulev2 noanim,title:^({window_title})$ ; keyword windowrulev2 move (monitor_w*0.5-window_w*0.5) {y},title:^({window_title})$"
+        "[[BATCH]]/keyword windowrulev2 float,title:^({window_title})$ ; /keyword windowrulev2 pin,title:^({window_title})$ ; /keyword windowrulev2 noinitialfocus,title:^({window_title})$ ; /keyword windowrulev2 noborder,title:^({window_title})$ ; /keyword windowrulev2 noshadow,title:^({window_title})$ ; /keyword windowrulev2 noblur,title:^({window_title})$ ; /keyword windowrulev2 nodim,title:^({window_title})$ ; /keyword windowrulev2 noanim,title:^({window_title})$ ; /keyword windowrulev2 rounding 0,title:^({window_title})$ ; /keyword windowrulev2 move (monitor_w*0.5-window_w*0.5) {y},title:^({window_title})$"
     );
     hypr_eval_or_fallback(&lua, &legacy);
 }
 
-pub fn apply_no_activate_hook(window_title: &str) {
+fn hypr_client_flags(window_title: &str) -> Option<(bool, bool)> {
+    let raw = hypr_ipc("j/clients")?;
+    let clients: Vec<serde_json::Value> = serde_json::from_str(&raw).ok()?;
+    let client = clients.iter().find(|c| {
+        (c.get("title").and_then(|v| v.as_str()) == Some(window_title)
+            || c.get("class").and_then(|v| v.as_str()) == Some("liebert-dynamic-island"))
+            && c.get("mapped").and_then(|v| v.as_bool()) == Some(true)
+    })?;
+    let floating = client.get("floating").and_then(|v| v.as_bool()).unwrap_or(false);
+    let pinned = client.get("pinned").and_then(|v| v.as_bool()).unwrap_or(false);
+    Some((floating, pinned))
+}
+
+fn dispatch_hypr_topmost(window_title: &str, check_legacy_flags: bool) {
+    let escaped = escape_lua_str(window_title);
+    let lua = format!(
+        "hl.dispatch(hl.dsp.window.float({{action=\"set\", window=\"title:^{escaped}$\"}})); hl.dispatch(hl.dsp.window.pin({{action=\"set\", window=\"title:^{escaped}$\"}})); hl.dispatch(hl.dsp.window.alter_zorder({{mode=\"top\", window=\"title:^{escaped}$\"}}))"
+    );
+    if let Some(resp) = hypr_ipc(&format!("/eval {lua}"))
+        && resp.trim() == "ok"
+    {
+        return;
+    }
+
+    let mut legacy_cmds = Vec::new();
+    if check_legacy_flags && let Some((floating, pinned)) = hypr_client_flags(window_title) {
+        if !floating {
+            legacy_cmds.push(format!("/dispatch setfloating title:^({window_title})$"));
+        }
+        if !pinned {
+            legacy_cmds.push(format!("/dispatch pin title:^({window_title})$"));
+        }
+    }
+    legacy_cmds.push(format!("/dispatch alterzorder top,title:^({window_title})$"));
+    let _ = hypr_ipc(&format!("[[BATCH]]{}", legacy_cmds.join(" ; ")));
+}
+
+pub fn apply_no_activate_hook(window_title: &str) -> bool {
+    if hypr_socket_path().is_none() {
+        return true;
+    }
+    if hypr_client_flags(window_title).is_none() {
+        return false;
+    }
+    dispatch_hypr_topmost(window_title, true);
+    if let Ok(mut guard) = overlay_cache().lock() {
+        guard.last_topmost_sync = Some(Instant::now());
+    }
+    true
+}
+
+pub fn ensure_overlay_topmost(window_title: &str, force: bool) {
     if hypr_socket_path().is_none() {
         return;
     }
-    let escaped = escape_lua_str(window_title);
-    let lua = format!(
-        "hl.dispatch(hl.dsp.window.float(\"title:^{escaped}$\")); hl.dispatch(hl.dsp.window.pin(\"title:^{escaped}$\"))"
-    );
-    let legacy = format!(
-        "[[BATCH]]dispatch setfloating title:^({window_title})$ ; dispatch pin title:^({window_title})$"
-    );
-    hypr_eval_or_fallback(&lua, &legacy);
+    if !force
+        && let Ok(guard) = overlay_cache().lock()
+        && let Some(at) = guard.last_topmost_sync
+        && at.elapsed() < Duration::from_millis(1000)
+    {
+        return;
+    }
+    if let Ok(mut guard) = overlay_cache().lock() {
+        guard.last_topmost_sync = Some(Instant::now());
+    }
+    dispatch_hypr_topmost(window_title, force);
 }
 
 pub fn sync_overlay_window(
@@ -183,14 +253,15 @@ pub fn sync_overlay_window(
             return;
         }
         guard.last_geometry = Some(geom);
+        guard.last_topmost_sync = Some(Instant::now());
     }
 
     let escaped = escape_lua_str(window_title);
     let lua = format!(
-        "hl.dispatch(hl.dsp.window.resize({{x={tw}, y={th}, exact=true, window=\"title:^{escaped}$\"}})); hl.dispatch(hl.dsp.window.move({{x={tx}, y={ty}, exact=true, window=\"title:^{escaped}$\"}}))"
+        "hl.dispatch(hl.dsp.window.float({{action=\"set\", window=\"title:^{escaped}$\"}})); hl.dispatch(hl.dsp.window.pin({{action=\"set\", window=\"title:^{escaped}$\"}})); hl.dispatch(hl.dsp.window.resize({{x={tw}, y={th}, exact=true, window=\"title:^{escaped}$\"}})); hl.dispatch(hl.dsp.window.move({{x={tx}, y={ty}, exact=true, window=\"title:^{escaped}$\"}})); hl.dispatch(hl.dsp.window.alter_zorder({{mode=\"top\", window=\"title:^{escaped}$\"}}))"
     );
     let legacy = format!(
-        "[[BATCH]]dispatch resizewindowpixel exact {tw} {th},title:^({window_title})$ ; dispatch movewindowpixel exact {tx} {ty},title:^({window_title})$"
+        "[[BATCH]]/dispatch resizewindowpixel exact {tw} {th},title:^({window_title})$ ; /dispatch movewindowpixel exact {tx} {ty},title:^({window_title})$ ; /dispatch alterzorder top,title:^({window_title})$"
     );
     hypr_eval_or_fallback(&lua, &legacy);
 }
@@ -200,8 +271,8 @@ pub fn bring_window_to_front(window_title: &str) -> bool {
         return true;
     }
     let escaped = escape_lua_str(window_title);
-    let lua = format!("hl.dispatch(hl.dsp.window.focus(\"title:^{escaped}$\"))");
-    let legacy = format!("dispatch focuswindow title:^({window_title})$");
+    let lua = format!("hl.dispatch(hl.dsp.focus({{window=\"title:^{escaped}$\"}}))");
+    let legacy = format!("/dispatch focuswindow title:^({window_title})$");
     hypr_eval_or_fallback(&lua, &legacy);
     true
 }
