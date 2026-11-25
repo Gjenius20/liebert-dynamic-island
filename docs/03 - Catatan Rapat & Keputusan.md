@@ -137,3 +137,13 @@ Log *Architecture Decision Records (ADR)* untuk proyek [[00 - Dashboard Proyek]]
   2. **Direct Win32 Visibility:** Mengganti `ViewportCommand::Visible` di Windows dengan `set_overlay_visible` yang memanggil `ShowWindow(hwnd, SW_HIDE / SW_SHOWNOACTIVATE)` langsung tanpa menyentuh `winit` `apply_diff`.
   3. **Accurate Fullscreen Bounds:** Menggunakan `DWMWA_EXTENDED_FRAME_BOUNDS` dan ambang batas taskbar `>= 20 px` (`is_rect_covering_monitor_as_fullscreen`) agar jendela maximized biasa tidak memicu auto-hide.
 - **Konsekuensi:** Flicker buka-tutup/morph hilang total, style `WS_EX_NOACTIVATE` dan fokus aplikasi fullscreen tetap terjaga, dan seluruh area di luar pill tetap bisa diklik menembus overlay.
+
+## ADR-014: Pomodoro Timer, Font Perangkat, Karaoke Translate, & Windowed-Fullscreen
+- **Tanggal:** 2026-11-26
+- **Status:** Accepted
+- **Konteks:** Pengguna membutuhkan dukungan sembunyi otomatis untuk aplikasi **windowed-fullscreen** (yang sering memiliki `WS_CAPTION` meski menutupi layar penuh), kepatuhan terhadap `auto_hide_delay_secs` saat keluar fullscreen, opsi **Translate** sebagai teks karaoke utama, pemilih font dari font terinstal di perangkat, dan fitur **Pomodoro**.
+- **Keputusan:**
+  1. **Windowed-Fullscreen & Delay:** `is_rect_covering_monitor_as_fullscreen` mendeteksi window ber-`WS_CAPTION` yang menutupi penuh tepi bawah monitor (`win_rect.bottom >= mon.bottom`) saat auto-hide taskbar aktif; `set_fullscreen_active` selalu me-reset `idle_since` saat status fullscreen berubah.
+  2. **Device Font Picker:** `collect_fonts_from_dirs` memindai direktori font OS (`.ttf`/`.otf`/`.ttc`) tanpa dependensi tambahan dan `apply_configured_fonts` menyisipkan font pilihan pada prioritas tertinggi `FontFamily::Proportional`.
+  3. **Karaoke Translate & Pomodoro:** Menambah `KaraokeLyricMode::Translate` dan modul OS-agnostic `src/pomodoro.rs` (`Focus`/`ShortBreak`/`LongBreak`, notifikasi selesai fase, & countdown idle).
+- **Konsekuensi:** Seluruh preferensi tersimpan lokal di `config.toml`, tetap kompatibel dengan `#[serde(default)]`.

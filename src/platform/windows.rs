@@ -880,12 +880,27 @@ fn is_rect_covering_monitor_as_fullscreen(
     if !covers_monitor {
         return false;
     }
-    // A 2px work-area inset means an auto-hidden taskbar, which a maximized window also leaves.
+    // A 2px work-area inset means an auto-hidden taskbar, which a maximized window leaves
+    // uncovered (bottom == work.bottom), whereas windowed-fullscreen covers mon.bottom.
     let has_visible_taskbar = (mon.bottom - work.bottom) >= 20
         || (work.top - mon.top) >= 20
         || (work.left - mon.left) >= 20
         || (mon.right - work.right) >= 20;
-    has_visible_taskbar || !has_caption
+    let covers_autohide_edge = work.bottom < mon.bottom && win_rect.bottom >= mon.bottom;
+    has_visible_taskbar || !has_caption || covers_autohide_edge
+}
+
+pub fn list_installed_fonts() -> Vec<super::InstalledFont> {
+    let mut dirs = vec![std::path::PathBuf::from(r"C:\Windows\Fonts")];
+    if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+        dirs.push(
+            std::path::PathBuf::from(local_app_data)
+                .join("Microsoft")
+                .join("Windows")
+                .join("Fonts"),
+        );
+    }
+    super::collect_fonts_from_dirs(&dirs)
 }
 
 #[cfg(test)]
@@ -914,8 +929,15 @@ mod tests {
             work_taskbar,
             true
         ));
-        // Maximized with auto-hidden taskbar and a title bar is not fullscreen.
+        // Maximized with auto-hidden taskbar stops at work_autohide.bottom (1078 < 1080).
         assert!(!is_rect_covering_monitor_as_fullscreen(
+            rect(0, 0, 1920, 1078),
+            mon,
+            work_autohide,
+            true
+        ));
+        // Windowed-fullscreen with auto-hidden taskbar covers full monitor height (1080).
+        assert!(is_rect_covering_monitor_as_fullscreen(
             rect(0, 0, 1920, 1080),
             mon,
             work_autohide,

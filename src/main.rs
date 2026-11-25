@@ -5,6 +5,7 @@ mod clock;
 mod config;
 mod lyrics;
 mod platform;
+mod pomodoro;
 mod state;
 mod todo;
 mod tray;
@@ -77,7 +78,7 @@ fn main() -> ExitCode {
         WINDOW_TITLE,
         options,
         Box::new(move |cc| {
-            ui::install_base_fallback_fonts(&cc.egui_ctx);
+            ui::apply_configured_fonts(&cc.egui_ctx, &config.font_name);
             let egui_ctx = cc.egui_ctx.clone();
             let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || egui_ctx.request_repaint());
 

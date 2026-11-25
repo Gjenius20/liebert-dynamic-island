@@ -29,7 +29,7 @@ Referensi cakupan fitur: [[PRD-LiebertDynamicIsland-MVP]].
 - [x] Implementasikan interaksi: auto-collapse 5 detik, hover expand & pause timer, serta tombol `Dismiss`
 
 ### Fase 4: Testing & Release
-- [x] Tambahkan unit test state machine, config, clock, lyrics, todo, calendar, album accent, fullscreen rect, & text truncation (`cargo test` — 27 tests passed)
+- [x] Tambahkan unit test state machine, config, clock, lyrics, todo, calendar, pomodoro, album accent, fullscreen rect, & text truncation (`cargo test` — 30 tests passed)
 - [ ] Uji manual edge cases: multi-notifikasi berurutan, teks panjang/Unicode, multi-DPI scaling, hover expand live, top-edge hover reveal saat auto-hide, Spotify lyrics, & Google Calendar `.ics`
 - [ ] Verifikasi target performa `--release`: RAM idle `< 25 MB`, CPU idle `< 0.5%`, latency `< 150 ms`
 - [ ] Perbarui `README.md` (cara build, izin Windows, catatan daemon Linux) & lakukan smoke test binary Windows + Linux
@@ -51,7 +51,8 @@ Referensi cakupan fitur: [[PRD-LiebertDynamicIsland-MVP]].
 - [x] **Jam & Zona Waktu + Idle Display Mode:** Jam IANA (`chrono-tz`), format 12h/24h, detik, dan pilihan tampilan idle (`Auto`, `Clock`, `Lyrics`, `NextEvent`, `Minimal`) di `src/clock.rs` & `src/ui/`
 - [x] **Delayed Auto-Hide + Top-Edge Hover Reveal:** Auto-hide setelah *N* detik idle (`auto_hide_delay_secs`) dan muncul kembali saat kursor mengarah ke tepi atas tengah layar (Windows)
 - [x] **Fullscreen / Game Auto-Hide:** Sembunyikan pill otomatis saat aplikasi/game/video fullscreen aktif di monitor utama (Windows; toggle di Settings)
-- [ ] **Quick Timer / Pomodoro:** Countdown fokus langsung di pill idle yang terhubung dengan Todo List
+- [x] **Quick Timer / Pomodoro:** Countdown fokus langsung di pill idle, tab `⏱ Timer`, notifikasi selesai fase, & pengaturan durasi (`src/pomodoro.rs`)
+- [x] **Device Font Picker & Karaoke Translate Mode:** Pilihan font terinstal perangkat di Settings (`list_installed_fonts`, `apply_configured_fonts`), opsi `KaraokeLyricMode::Translate`, serta perbaikan windowed-fullscreen + timer `auto_hide_delay_secs` pasca-fullscreen
 - [ ] **Launch at Startup & Multi-Monitor Picker:** Toggle autostart OS dan pilihan monitor target di Settings
 - [ ] **System HUD (Volume & Brightness):** Bar indikator custom saat volume atau brightness berubah
 - [ ] **Click-to-Focus App:** Klik notifikasi untuk memfokuskan aplikasi pengirimnya
