@@ -1,0 +1,32 @@
+[package]
+name = "liebert-dynamic-island"
+version = "0.1.0"
+edition = "2024"
+description = "Lightweight native Rust Dynamic Island notification overlay for Windows and Linux"
+
+[dependencies]
+eframe = { version = "0.37", default-features = false, features = ["glow", "default_fonts", "x11", "wayland"] }
+serde = { version = "1.0", features = ["derive"] }
+toml = "1.2"
+directories = "6.0"
+tray-icon = "0.27"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "ApplicationModel",
+    "Foundation",
+    "Foundation_Collections",
+    "UI_Notifications",
+    "UI_Notifications_Management",
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = "6.5"
+
+[profile.release]
+lto = "thin"
+strip = true
+opt-level = "s"

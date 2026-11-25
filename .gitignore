@@ -1,0 +1,6 @@
+# Obsidian local UI state
+.obsidian/
+.obsidian/workspace.json
+
+# Rust build artifacts
+target/

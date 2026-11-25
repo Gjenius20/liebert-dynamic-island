@@ -1,0 +1,45 @@
+---
+type: backlog
+status: active
+project: "[[00 - Dashboard Proyek]]"
+tags:
+  - project
+  - tasks
+---
+
+# 02 - Daftar Tugas & Backlog
+
+Referensi cakupan fitur: [[PRD-LiebertDynamicIsland-MVP]].
+
+## P0 — Must Have (MVP)
+### Fase 1: Setup Proyek & Technical Spike
+- [x] Inisialisasi `Cargo.toml` dan skeleton modul (`src/main.rs`, `src/config.rs`, `src/state.rs`, `src/tray.rs`, `src/ui/`, `src/platform/`)
+- [x] Spike Windows: uji `UserNotificationListener::Current()` pada `.exe` unpackaged vs Sparse Package/MSIX manifest *(lulus di `.exe` unpackaged: `Access: Allowed`, `21` active toasts terbaca)*
+- [ ] Spike Linux: uji D-Bus `org.freedesktop.Notifications` (`zbus`) & overlay `wlr-layer-shell` (Wayland) / dock (X11) di environment Linux
+- [x] Finalisasi pilihan renderer Rust (`eframe 0.37` + `Renderer::Glow`) di [[03 - Catatan Rapat & Keputusan]]
+
+### Fase 2: Core Features
+- [x] Definisikan `NotificationItem`, state machine (`Idle` ↔ `Compact` ↔ `Expanded`), dan queue sederhana di `src/state.rs`
+- [ ] Implementasikan bridge Windows WinRT & Linux D-Bus beserta error handling izin/daemon *(Windows terimplementasi & lolos spike; Linux `src/platform/linux.rs` belum dikompilasi/diuji di host Linux)*
+- [x] Implementasikan System Tray (`Pause/Resume`, `Auto-hide when idle`, `Exit`) dan persistensi `config.toml` (`%APPDATA%` / `~/.config`)
+
+### Fase 3: UI & Animation
+- [x] Bangun window overlay borderless transparan top-center yang non-focus-stealing (`src/ui/mod.rs` + Win32 `WS_EX_NOACTIVATE`)
+- [x] Implementasikan layout 3 state (`Idle`, `Compact`, `Expanded`) beserta animasi transisi ukuran (`eframe` `Glow`)
+- [x] Implementasikan interaksi: auto-collapse 5 detik, hover expand & pause timer, serta tombol `Dismiss`
+
+### Fase 4: Testing & Release
+- [x] Tambahkan unit test state machine & notification queue (`cargo test` — 7 tests passed)
+- [ ] Uji manual edge cases: multi-notifikasi berurutan, teks panjang/Unicode, multi-DPI scaling, dan permission denied/konflik daemon
+- [ ] Verifikasi target performa `--release`: RAM idle `< 25 MB`, CPU idle `< 0.5%`, latency `< 150 ms`
+- [ ] Perbarui `README.md` (cara build, izin Windows, catatan daemon Linux) & lakukan smoke test binary Windows + Linux
+
+## P1 — Should Have (Post-MVP)
+- [ ] Media Control (*Now Playing*) via SMTC (Windows) & MPRIS2 (Linux)
+- [ ] System HUD (indikator Volume & Brightness)
+- [ ] Fullscreen / Game Auto-Hide otomatis
+
+## P2 — Could Have (Future)
+- [ ] Timer / Pomodoro cepat di dalam pill
+- [ ] Quick Drop / File Shelf sementara
+- [ ] Multi-monitor picker & custom theme editor

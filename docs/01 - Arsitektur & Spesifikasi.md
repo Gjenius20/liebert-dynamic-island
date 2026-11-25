@@ -1,0 +1,67 @@
+---
+type: spec
+status: active
+project: "[[00 - Dashboard Proyek]]"
+tags:
+  - project
+  - architecture
+---
+
+# 01 - Arsitektur & Spesifikasi
+
+Referensi spesifikasi produk: [[PRD-LiebertDynamicIsland-MVP]].
+
+## Tech Stack (MVP)
+- **Bahasa:** Rust (`edition = "2024"`, `rustc 1.99.1`)
+- **UI / Renderer:** `eframe 0.37` (`egui`, `Renderer::Glow`, fitur `x11` & `wayland`) — dipilih pada Fase 1; lihat [[03 - Catatan Rapat & Keputusan]]
+- **Windows Bridge:** `windows 0.62` — Win32 windowing (`WS_EX_NOACTIVATE`, `WS_EX_TOOLWINDOW`, `GetSystemMetrics`) & WinRT `UserNotificationListener`
+- **Linux Bridge:** `zbus 6.5` (D-Bus `org.freedesktop.Notifications`) + windowing `eframe`/`winit` (X11 / Wayland)
+- **System Tray & Config:** `tray-icon 0.27`, `serde 1.0`, `toml 1.2`, `directories 6.0`
+
+## Struktur Folder Kode
+```text
+liebert-dynamic-island/
+├── Cargo.toml
+├── docs/                        # Dokumentasi Obsidian & PRD
+└── src/
+    ├── main.rs                  # Entry point, CLI flags (--spike-notifications, --demo), & eframe runner
+    ├── config.rs                # Load/save config.toml (%APPDATA% / ~/.config)
+    ├── state.rs                 # Island state machine (Idle, Compact, Expanded) & queue
+    ├── ui/
+    │   └── mod.rs               # Renderer pill overlay (eframe::App) & animasi lerp
+    ├── tray.rs                  # System tray menu & lifecycle control
+    └── platform/
+        ├── mod.rs               # Facade lintas OS & PlatformEvent
+        ├── windows.rs           # Win32 no-activate hook + WinRT UserNotificationListener
+        └── linux.rs             # D-Bus org.freedesktop.Notifications server (zbus)
+```
+
+## Skema Data & State Machine
+### Notification Payload
+```rust
+pub struct NotificationItem {
+    pub id: String,
+    pub app_name: String,
+    pub title: String,
+    pub body: String,
+    pub icon_rgba: Option<Vec<u8>>,
+    pub timestamp: u64,
+}
+```
+
+### State Machine Overlay
+- **`Idle`:** Pill compact di top-center (atau tersembunyi jika `auto_hide = true`).
+- **`Compact`:** Pill melebar menampilkan ikon app, judul, dan preview singkat; timer auto-collapse default 5 detik.
+- **`Expanded`:** Aktif saat hover pada `Compact` (menjeda timer), menampilkan body lengkap & tombol `Dismiss`.
+
+## Alur Komponen Utama
+1. **Startup:** `config.rs` membaca `config.toml` → `tray.rs` membuat ikon tray → `platform` memunculkan listener notifikasi di background thread/async task → `ui` membuka overlay window dalam state `Idle`.
+2. **Notifikasi Masuk:** OS memicu event (`UserNotificationListener` di Windows / D-Bus di Linux) → `platform` memetakan payload ke `NotificationItem` → kirim via channel ke `state.rs` (antrean sederhana) → `ui` beranimasi ke `Compact`.
+3. **Interaksi & Dismiss:** Hover menjeda timer dan masuk ke `Expanded`; klik `Dismiss` (atau timer 5 detik habis) menutup item aktif dan menampilkan item berikutnya di queue atau kembali ke `Idle`.
+
+## Target Non-Fungsional
+- **Startup Time:** `< 500 ms` hingga pill tampil.
+- **Notification Latency:** `< 150 ms` dari event OS hingga frame animasi masuk.
+- **Resource Footprint:** `< 25 MB` RAM idle (`< 50 MB` saat expanded), `< 0.5%` CPU idle (event-driven, tanpa busy-polling).
+- **Rendering & DPI:** `>= 60 FPS` saat animasi transisi; Per-Monitor DPI Aware v2 (Windows) & fractional scaling (Linux).
+- **Privasi:** 100% pemrosesan lokal di memori; tanpa telemetri maupun log notifikasi persisten ke disk.
