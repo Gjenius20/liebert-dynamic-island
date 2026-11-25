@@ -12,7 +12,7 @@ tags:
 
 ### Changed
 
-- `README.md`, `assets/*`: Memperbarui dokumentasi fitur dan menyematkan seluruh galeri preview UI terbaru (`ui-notch-clock.png`, `ui-island-clock.png`, `ui-notch-music.png`, `ui-island-music.png`, `ui-home.jpg`, `ui-music-lyrics.jpg`, `ui-todo.jpg`, `ui-calendar.jpg`, `ui-timer.jpg`, `ui-settings.png`).
+- `README.md`, `assets/*`: Memperbarui dokumentasi fitur dan menyematkan seluruh galeri preview UI terbaru (`ui-notch-clock.png`, `ui-island-clock.png`, `ui-notch-music.png`, `ui-island-music.png`, `ui-home.jpg` [diperbarui], `ui-music-lyrics.jpg`, `ui-todo.jpg`, `ui-calendar.jpg`, `ui-timer.jpg`, `ui-settings.png`).
 - `src/ui/mod.rs`, `src/ui/settings.rs`: Mengoptimalkan frame pacing dan alokasi memori UI — menaikkan refresh karaoke lirik ke `16 ms` (~60 FPS) dan visualizer idle ke `33 ms` (~30 FPS) saat terlihat, menurunkan repaint saat overlay tersembunyi ke `250 ms`, serta menghindari kloning ulang `installed_fonts` dan `calendar_events` setiap frame pada `DeferredSettingsState`.
 
 ### Added
@@ -105,7 +105,7 @@ tags:
 
 ### Changed
 
-- `README.md`, `assets/*`: Memperbarui dokumentasi fitur dan menyematkan seluruh galeri preview UI terbaru (`ui-notch-clock.png`, `ui-island-clock.png`, `ui-notch-music.png`, `ui-island-music.png`, `ui-home.jpg`, `ui-music-lyrics.jpg`, `ui-todo.jpg`, `ui-calendar.jpg`, `ui-timer.jpg`, `ui-settings.png`).
+- `README.md`, `assets/*`: Memperbarui dokumentasi fitur dan menyematkan seluruh galeri preview UI terbaru (`ui-notch-clock.png`, `ui-island-clock.png`, `ui-notch-music.png`, `ui-island-music.png`, `ui-home.jpg` [diperbarui], `ui-music-lyrics.jpg`, `ui-todo.jpg`, `ui-calendar.jpg`, `ui-timer.jpg`, `ui-settings.png`).
 - `src/ui/mod.rs`, `src/ui/settings.rs`: Mengoptimalkan frame pacing dan alokasi memori UI — menaikkan refresh karaoke lirik ke `16 ms` (~60 FPS) dan visualizer idle ke `33 ms` (~30 FPS) saat terlihat, menurunkan repaint saat overlay tersembunyi ke `250 ms`, serta menghindari kloning ulang `installed_fonts` dan `calendar_events` setiap frame pada `DeferredSettingsState`. (Earlier)
 - `src/ui/mod.rs`, `src/config.rs`, `src/main.rs`: Menambahkan **Notch Dock Mode** (`notch_dock_mode`, default `true`) yang menempel pada tepi atas layar (`y = 0`) dengan telinga cekung atas (`paint_island_surface` + `egui::Mesh`), mini cover/disc badge + live lyric + 3-bar equalizer animasi saat idle musik, serta tetap otomatis tersembunyi saat aplikasi fullscreen aktif.
 - `src/platform/mod.rs`, `src/platform/windows.rs`, `src/platform/linux.rs`: Menambahkan ekstraksi cover album (`Storage_Streams::DataReader` pada WinRT SMTC & `mpris:artUrl` pada MPRIS2 Linux, cache per lagu, decode `image 0.25`) serta `extract_dominant_accent()` untuk mengekstrak warna aksen dominan album.
@@ -140,7 +140,7 @@ tags:
 
 ### Changed
 
-- `README.md`, `assets/*`: Memperbarui dokumentasi fitur dan menyematkan seluruh galeri preview UI terbaru (`ui-notch-clock.png`, `ui-island-clock.png`, `ui-notch-music.png`, `ui-island-music.png`, `ui-home.jpg`, `ui-music-lyrics.jpg`, `ui-todo.jpg`, `ui-calendar.jpg`, `ui-timer.jpg`, `ui-settings.png`).
+- `README.md`, `assets/*`: Memperbarui dokumentasi fitur dan menyematkan seluruh galeri preview UI terbaru (`ui-notch-clock.png`, `ui-island-clock.png`, `ui-notch-music.png`, `ui-island-music.png`, `ui-home.jpg` [diperbarui], `ui-music-lyrics.jpg`, `ui-todo.jpg`, `ui-calendar.jpg`, `ui-timer.jpg`, `ui-settings.png`).
 - `src/ui/mod.rs`, `src/ui/settings.rs`: Mengoptimalkan frame pacing dan alokasi memori UI — menaikkan refresh karaoke lirik ke `16 ms` (~60 FPS) dan visualizer idle ke `33 ms` (~30 FPS) saat terlihat, menurunkan repaint saat overlay tersembunyi ke `250 ms`, serta menghindari kloning ulang `installed_fonts` dan `calendar_events` setiap frame pada `DeferredSettingsState`. (Initial Bootstrap)
 - `Cargo.toml`: Inisialisasi manifest proyek Rust (`edition = "2024"`) dengan dependensi `eframe 0.37` (`glow`), `windows 0.62`, `zbus 6.5` (target Linux), `tray-icon 0.27`, `serde`, `toml`, dan `directories`, serta profil release hemat ukuran (`lto = "thin"`, `strip = true`, `opt-level = "s"`).
 - `src/config.rs`: Menambahkan loader/saver konfigurasi lokal `config.toml` (`auto_hide_when_idle`, `top_offset_px`, `collapse_timeout_secs`) beserta 3 unit test fallback & round-trip TOML.
