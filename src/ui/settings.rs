@@ -71,51 +71,26 @@ pub fn render_settings_viewport(ctx: &egui::Context, st: SettingsWindowState<'_>
                 .inner_margin(egui::Margin::same(14));
 
             egui::CentralPanel::default().frame(panel_frame).show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.selectable_value(st.tab, SettingsTab::Appearance, "Appearance");
-                    ui.selectable_value(st.tab, SettingsTab::Todo, "Todo List");
-                    ui.selectable_value(st.tab, SettingsTab::Calendar, "Google Calendar");
-                });
-                ui.add_space(4.0);
-                ui.separator();
-                ui.add_space(4.0);
-
-                egui::ScrollArea::vertical().show(ui, |ui| match *st.tab {
-                    SettingsTab::Appearance => render_appearance_tab(
-                        ui,
-                        st.config,
-                        st.config_dirty,
-                        st.test_notification_requested,
-                        st.installed_fonts,
-                        st.font_search,
-                    ),
-                    SettingsTab::Todo => {
-                        render_todo_tab(ui, st.todos, st.new_todo_input);
-                    }
-                    SettingsTab::Calendar => render_calendar_tab(
-                        ui,
-                        st.config,
-                        st.calendar_url_input,
-                        st.calendar_events,
-                        st.calendar_status,
-                        st.calendar_cmd_tx,
-                        st.config_dirty,
-                    ),
-                render_settings_tabs_body(ui, &mut SettingsBodyState {
-                    tab: st.tab,
-                    config: st.config,
-                    todos: st.todos,
-                    new_todo_input: st.new_todo_input,
-                    calendar_url_input: st.calendar_url_input,
-                    calendar_events: st.calendar_events,
-                    calendar_status: st.calendar_status,
-                    calendar_cmd_tx: Some(st.calendar_cmd_tx),
-                    config_dirty: st.config_dirty,
-                    todos_dirty: &mut false,
-                    test_notification_requested: st.test_notification_requested,
-                    calendar_set_url_requested: &mut None,
-                    calendar_refresh_requested: &mut false,
-                });
+                render_settings_tabs_body(
+                    ui,
+                    &mut SettingsBodyState {
+                        tab: st.tab,
+                        config: st.config,
+                        todos: st.todos,
+                        new_todo_input: st.new_todo_input,
+                        calendar_url_input: st.calendar_url_input,
+                        calendar_events: st.calendar_events,
+                        calendar_status: st.calendar_status,
+                        calendar_cmd_tx: Some(st.calendar_cmd_tx),
+                        config_dirty: st.config_dirty,
+                        todos_dirty: &mut false,
+                        test_notification_requested: st.test_notification_requested,
+                        calendar_set_url_requested: &mut None,
+                        calendar_refresh_requested: &mut false,
+                        installed_fonts: st.installed_fonts,
+                        font_search: st.font_search,
+                    },
+                );
             });
         },
     );
@@ -135,6 +110,8 @@ struct SettingsBodyState<'a> {
     test_notification_requested: &'a mut bool,
     calendar_set_url_requested: &'a mut Option<String>,
     calendar_refresh_requested: &'a mut bool,
+    installed_fonts: &'a mut Vec<InstalledFont>,
+    font_search: &'a mut String,
 }
 
 fn render_settings_tabs_body(ui: &mut egui::Ui, st: &mut SettingsBodyState<'_>) {
@@ -153,6 +130,8 @@ fn render_settings_tabs_body(ui: &mut egui::Ui, st: &mut SettingsBodyState<'_>) 
             st.config,
             st.config_dirty,
             st.test_notification_requested,
+            st.installed_fonts,
+            st.font_search,
         ),
         SettingsTab::Todo => {
             *st.todos_dirty |= render_todo_tab(ui, st.todos, st.new_todo_input);
@@ -168,6 +147,7 @@ pub fn run_standalone_settings(ipc_sock: Option<PathBuf>) -> Result<(), String> 
 
     let config = Config::load();
     let calendar_url_input = config.google_calendar_ics_url.clone();
+    let applied_font_name = config.font_name.clone();
     let todos = TodoStore::load();
 
     struct StandaloneSettingsApp {
@@ -176,6 +156,9 @@ pub fn run_standalone_settings(ipc_sock: Option<PathBuf>) -> Result<(), String> 
         todos: TodoStore,
         new_todo_input: String,
         calendar_url_input: String,
+        installed_fonts: Vec<InstalledFont>,
+        font_search: String,
+        applied_font_name: String,
         ipc_sock: Option<PathBuf>,
     }
 
@@ -193,7 +176,7 @@ pub fn run_standalone_settings(ipc_sock: Option<PathBuf>) -> Result<(), String> 
 
     impl eframe::App for StandaloneSettingsApp {
         fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-            apply_settings_theme(ui);
+            apply_settings_theme(ui, self.config.accent_color);
             let panel_frame = egui::Frame::new()
                 .fill(Color32::from_rgb(19, 19, 23))
                 .inner_margin(egui::Margin::same(14));
@@ -226,11 +209,17 @@ pub fn run_standalone_settings(ipc_sock: Option<PathBuf>) -> Result<(), String> 
                         test_notification_requested: &mut test_notif,
                         calendar_set_url_requested: &mut cal_set_url,
                         calendar_refresh_requested: &mut cal_refresh,
+                        installed_fonts: &mut self.installed_fonts,
+                        font_search: &mut self.font_search,
                     },
                 );
             });
 
             if config_dirty {
+                if self.config.font_name != self.applied_font_name {
+                    self.applied_font_name = self.config.font_name.clone();
+                    crate::ui::apply_configured_fonts(ui.ctx(), &self.applied_font_name);
+                }
                 if let Err(err) = self.config.save() {
                     eprintln!("Failed to save config: {err}");
                 } else {
@@ -266,13 +255,16 @@ pub fn run_standalone_settings(ipc_sock: Option<PathBuf>) -> Result<(), String> 
         SETTINGS_WINDOW_TITLE,
         options,
         Box::new(move |cc| {
-            crate::ui::install_base_fallback_fonts(&cc.egui_ctx);
+            crate::ui::apply_configured_fonts(&cc.egui_ctx, &config.font_name);
             Ok(Box::new(StandaloneSettingsApp {
                 tab: SettingsTab::Appearance,
                 config,
                 todos,
                 new_todo_input: String::new(),
                 calendar_url_input,
+                installed_fonts: Vec::new(),
+                font_search: String::new(),
+                applied_font_name,
                 ipc_sock,
             }))
         }),

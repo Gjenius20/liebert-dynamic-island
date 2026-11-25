@@ -133,14 +133,27 @@ Log *Architecture Decision Records (ADR)* untuk proyek [[00 - Dashboard Proyek]]
 - **Status:** Accepted
 - **Konteks:** Meskipun memakai envelope canvas selama animasi, memanggil `ViewportCommand::InnerSize`/`OuterPosition` pada frame awal dan akhir buka-tutup tetap menimbulkan lompatan posisi `1–2` frame karena `winit` menerapkan perintah viewport secara asinkron setelah `ui()` selesai. Selain itu, `ViewportCommand::Visible(bool)` di `winit 0.30` memanggil `SetWindowLongW` dari state internalnya (menghapus `WS_EX_NOACTIVATE` & `WS_POPUP`) serta `ShowWindow(SW_SHOW)` yang mencuri fokus foreground dari aplikasi fullscreen sehingga `is_foreground_fullscreen()` gagal. Jendela maximized dengan auto-hide taskbar Windows 11 (`work.bottom` selisih `2 px`) juga sempat salah terdeteksi sebagai fullscreen.
 - **Keputusan:**
+  1. **Permanent Fixed Canvas + Dynamic Click-Through (Windows):** Ukuran window root dikunci ke `permanent_canvas_size(config)` pada `y = 0.0` sepanjang waktu tanpa memanggil `InnerSize`/`OuterPosition` saat buka-tutup atau morph; area di luar pill dibuat click-through via `set_overlay_click_through` (`WS_EX_LAYERED | WS_EX_TRANSPARENT`).
+  2. **Direct Win32 Visibility:** Mengganti `ViewportCommand::Visible` di Windows dengan `set_overlay_visible` yang memanggil `ShowWindow(hwnd, SW_HIDE / SW_SHOWNOACTIVATE)` langsung tanpa menyentuh `winit` `apply_diff`.
+  3. **Accurate Fullscreen Bounds:** Menggunakan `DWMWA_EXTENDED_FRAME_BOUNDS` dan ambang batas taskbar `>= 20 px` (`is_rect_covering_monitor_as_fullscreen`) agar jendela maximized biasa tidak memicu auto-hide.
+- **Konsekuensi:** Flicker buka-tutup/morph hilang total di Windows, style `WS_EX_NOACTIVATE` dan fokus aplikasi fullscreen tetap terjaga, dan seluruh area di luar pill tetap bisa diklik menembus overlay.
+
+## ADR-013b: Native Wayland `wlr-layer-shell`, Pill Translation, & Spring Physics
+- **Tanggal:** 2026-11-26
+- **Status:** Accepted
+- **Konteks:** Pada Linux Wayland, window reguler `eframe`/`winit` terikat workspace sehingga tidak dapat melayang global di atas seluruh workspace dan layer seperti Quickshell. Selain itu, pengguna menginginkan baris terjemahan ringkas di idle/compact pill dan animasi pegas harmonik ala Dynamic Island macOS.
+- **Keputusan:**
   1. **Native Wayland `wlr-layer-shell` (`src/platform/wayland_layer.rs`):** Di Linux Wayland, overlay utama dijalankan langsung di atas `zwlr_layer_surface_v1` (`Layer::Overlay`, `Anchor::TOP`, `exclusive_zone = -1`, `KeyboardInteractivity::None`) menggunakan `smithay-client-toolkit 0.19` + `glutin 0.32` EGL + `egui_glow 0.37` + `calloop 0.13`, ditambah `hl.layer_rule` Hyprland (`order = -1`, `above_lock = false`, `no_anim = true`, `blur = false`). Dengan ini overlay terpisah penuh dari seluruh workspace, tetap tepat di atas Quickshell namun di bawah lockscreen dan layer overlay ber-order lebih tinggi, serta memakai region input kosong (`set_input_region`) saat tersembunyi. Mode `--settings --ipc-sock` menangani jendela Settings interaktif secara terpisah lewat `eframe` dengan sinkronisasi live via UNIX socket. Jalur `eframe` tetap dipertahankan sebagai fallback otomatis untuk X11/compositor non-`wlr-layer-shell` dan Windows.
   2. **Pill Lyric Translation (`show_pill_translation`):** Menambahkan `Config::show_pill_translation` (default `true`) beserta checkbox di Settings (`Music & Synced Lyrics`), serta memperluas `IdleDisplayMode::Lyrics` agar merender baris terjemahan di bawah lirik utama (`44 px * scale` saat terjemahan tersedia).
   3. **Animasi Spring Bouncy ala macOS (`step_spring`):** Mengganti animasi eksponensial di `src/ui/mod.rs` dengan fisika pegas harmonik teredam 2nd-order ber-substep (`omega_x`/`omega_y` & `zeta` berbeda untuk expand vs collapse serta pop-in saat `became_visible`), dilengkapi animasi spring `notch_morph` dan pacing `6 ms` pada runner Wayland.
 - **Konsekuensi:** Di Wayland (`Hyprland`/`Sway`/`River`/`Niri`), Dynamic Island tidak pernah lagi masuk atau berpindah ke workspace aplikasi biasa dan posisinya stabil di top-center di atas Quickshell.
-  1. **Permanent Fixed Canvas + Dynamic Click-Through:** Ukuran window root dikunci ke `permanent_canvas_size(config)` pada `y = 0.0` sepanjang waktu tanpa memanggil `InnerSize`/`OuterPosition` saat buka-tutup atau morph; area di luar pill dibuat click-through via `set_overlay_click_through` (`WS_EX_LAYERED | WS_EX_TRANSPARENT`).
-  2. **Direct Win32 Visibility:** Mengganti `ViewportCommand::Visible` di Windows dengan `set_overlay_visible` yang memanggil `ShowWindow(hwnd, SW_HIDE / SW_SHOWNOACTIVATE)` langsung tanpa menyentuh `winit` `apply_diff`.
-  3. **Accurate Fullscreen Bounds:** Menggunakan `DWMWA_EXTENDED_FRAME_BOUNDS` dan ambang batas taskbar `>= 20 px` (`is_rect_covering_monitor_as_fullscreen`) agar jendela maximized biasa tidak memicu auto-hide.
-- **Konsekuensi:** Flicker buka-tutup/morph hilang total, style `WS_EX_NOACTIVATE` dan fokus aplikasi fullscreen tetap terjaga, dan seluruh area di luar pill tetap bisa diklik menembus overlay.
+
+## ADR-015: Lisensi GPL-3.0 (`LICENSE.md`), Transisi Lirik Fade-Up/Down, & Release Workflow
+- **Tanggal:** 2026-11-26
+- **Status:** Accepted
+- **Konteks:** Proyek memerlukan berkas `LICENSE.md` yang kompatibel dengan dependensi `kakasi 0.1` (`GPL-3.0`), animasi pergantian baris lirik yang lebih halus di pill mode (`IdleDisplayMode::Lyrics`), serta otomatisasi rilis lintas OS Windows & Linux.
+- **Keputusan:** Menetapkan `GPL-3.0-or-later` pada `LICENSE.md` & `Cargo.toml`, menambahkan `PillLyricTransition` (`240 ms` fade-up/down terklip berdasarkan `ActiveKaraoke::line_index`) di `src/ui/mod.rs`, dan menambahkan `.github/workflows/release.yml` untuk membangun rilis Windows (`.zip`) dan Linux (`AppImage` + `.tar.gz`).
+- **Konsekuensi:** Seluruh distribusi biner memiliki lisensi yang sah, transisi lirik di pill terasa mulus di `>= 60 FPS`, dan rilis Windows + Linux otomatis tersedia setiap tag `v*` didorong ke GitHub.
 
 ## ADR-014: Pomodoro Timer, Font Perangkat, Karaoke Translate, & Windowed-Fullscreen
 - **Tanggal:** 2026-11-26

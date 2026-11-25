@@ -2,6 +2,7 @@
 name = "liebert-dynamic-island"
 version = "0.1.0"
 edition = "2024"
+license = "GPL-3.0-or-later"
 description = "Lightweight native Rust Dynamic Island notification overlay for Windows and Linux"
 
 [dependencies]

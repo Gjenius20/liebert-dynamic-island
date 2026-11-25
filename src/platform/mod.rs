@@ -205,7 +205,10 @@ pub fn spawn_fullscreen_watcher(
     #[cfg(windows)]
     windows::spawn_fullscreen_watcher(tx, on_wake);
 
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    linux::spawn_fullscreen_watcher(tx, on_wake);
+
+    #[cfg(not(any(windows, target_os = "linux")))]
     let _ = (tx, on_wake);
 }
 
@@ -275,20 +278,7 @@ pub fn apply_overlay_window_setup(window_title: &str) -> bool {
     }
 }
 
-pub fn position_overlay_window(
-    window_title: &str,
-    x_logical: f32,
-    y_logical: f32,
-    w_logical: f32,
-    h_logical: f32,
-) {
-    #[cfg(target_os = "linux")]
-    linux::position_overlay_window(window_title, x_logical, y_logical, w_logical, h_logical);
-
-    #[cfg(not(target_os = "linux"))]
-    let _ = (window_title, x_logical, y_logical, w_logical, h_logical);
-}
-
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn set_overlay_visible(window_title: &str, visible: bool) -> bool {
     #[cfg(windows)]
     {
@@ -303,6 +293,7 @@ pub fn set_overlay_visible(window_title: &str, visible: bool) -> bool {
     }
 }
 
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn set_overlay_click_through(window_title: &str, passthrough: bool) {
     #[cfg(windows)]
     windows::set_overlay_click_through(window_title, passthrough);
@@ -311,9 +302,15 @@ pub fn set_overlay_click_through(window_title: &str, passthrough: bool) {
     let _ = (window_title, passthrough);
 }
 
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn pin_window_top_y(window_title: &str, target_y_px: i32) {
     #[cfg(windows)]
     windows::pin_window_top_y(window_title, target_y_px);
+
+    #[cfg(not(windows))]
+    let _ = (window_title, target_y_px);
+}
+
 pub fn ensure_overlay_topmost(window_title: &str, force: bool) {
     #[cfg(target_os = "linux")]
     linux::ensure_overlay_topmost(window_title, force);
@@ -347,6 +344,7 @@ pub fn sync_overlay_window(
     let _ = (window_title, x_logical, y_logical, w_logical, h_logical, notch_dock_mode);
 }
 
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn is_cursor_in_screen_rect(
     left_px: i32,
     top_px: i32,
@@ -363,8 +361,24 @@ pub fn is_cursor_in_screen_rect(
     }
 }
 
-#[allow(dead_code)] // Used as fallback on non-rect cursor checks.
-pub fn is_cursor_over_window(window_title: &str, padding_px: i32) -> Option<bool> {
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn is_cursor_in_top_trigger(
+    top_offset_px: f32,
+    trigger_width_px: f32,
+    pixels_per_point: f32,
+) -> Option<bool> {
+    #[cfg(windows)]
+    return windows::is_cursor_in_top_trigger(top_offset_px, trigger_width_px, pixels_per_point);
+
+    #[cfg(not(windows))]
+    {
+        let _ = (top_offset_px, trigger_width_px, pixels_per_point);
+        None
+    }
+}
+
+#[cfg_attr(windows, allow(dead_code))]
+pub fn detect_overlay_hover(input: HoverPollInput<'_>) -> bool {
     #[cfg(windows)]
     return windows::detect_overlay_hover(input);
 

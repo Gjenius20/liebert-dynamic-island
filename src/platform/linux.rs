@@ -362,6 +362,34 @@ pub fn detect_overlay_hover(input: HoverPollInput<'_>) -> bool {
     over
 }
 
+pub fn spawn_fullscreen_watcher(
+    tx: mpsc::Sender<PlatformEvent>,
+    on_wake: Arc<dyn Fn() + Send + Sync>,
+) {
+    if hypr_socket_path().is_none() {
+        return;
+    }
+    std::thread::Builder::new()
+        .name("linux-fullscreen-watcher".to_owned())
+        .spawn(move || {
+            let mut last_fs = is_foreground_fullscreen();
+            let _ = tx.send(PlatformEvent::Fullscreen(last_fs));
+            on_wake();
+            loop {
+                std::thread::sleep(Duration::from_millis(250));
+                let fs = is_foreground_fullscreen();
+                if fs != last_fs {
+                    last_fs = fs;
+                    if tx.send(PlatformEvent::Fullscreen(fs)).is_err() {
+                        break;
+                    }
+                    on_wake();
+                }
+            }
+        })
+        .expect("spawn linux fullscreen watcher thread");
+}
+
 pub fn is_foreground_fullscreen() -> bool {
     let Some(raw) = hypr_ipc("j/activewindow") else {
         return false;
@@ -894,6 +922,8 @@ pub fn list_installed_fonts() -> Vec<super::InstalledFont> {
         dirs.push(std::path::PathBuf::from(home).join(".local/share/fonts"));
     }
     super::collect_fonts_from_dirs(&dirs)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

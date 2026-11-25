@@ -29,7 +29,7 @@ Referensi cakupan fitur: [[PRD-LiebertDynamicIsland-MVP]].
 - [x] Implementasikan interaksi: auto-collapse 5 detik, hover expand & pause timer, serta tombol `Dismiss`
 
 ### Fase 4: Testing & Release
-- [x] Tambahkan unit test state machine, config, clock, lyrics, todo, calendar, pomodoro, album accent, fullscreen rect, & text truncation (`cargo test` — 30 tests passed)
+- [x] Tambahkan unit test state machine, config, clock, lyrics, todo, calendar, pomodoro, album accent, fullscreen rect, & text truncation (`cargo test` — 35 tests passed)
 - [ ] Uji manual edge cases: multi-notifikasi berurutan, teks panjang/Unicode, multi-DPI scaling, hover expand live, top-edge hover reveal saat auto-hide, Spotify lyrics, & Google Calendar `.ics`
 - [ ] Verifikasi target performa `--release`: RAM idle `< 25 MB`, CPU idle `< 0.5%`, latency `< 150 ms`
 - [x] Perbarui `README.md` (cara build, izin Windows, catatan daemon Linux) & lakukan smoke test binary Windows + Linux *(README.md diperbarui sesuai kode aktual; smoke test Linux masih pending)*

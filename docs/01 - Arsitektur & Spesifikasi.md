@@ -22,7 +22,10 @@ Referensi spesifikasi produk: [[PRD-LiebertDynamicIsland-MVP]].
 ```text
 liebert-dynamic-island/
 ├── Cargo.toml
+├── LICENSE.md                   # Lisensi GPL-3.0-or-later
 ├── AGENTS.md                    # Panduan kolaborasi & aturan repo
+├── .github/workflows/
+│   └── release.yml              # GitHub Actions release build (Windows & Linux + AppImage)
 ├── docs/                        # Dokumentasi Obsidian & PRD
 ├── scripts/
 │   └── build-appimage.sh        # Skrip build & packaging AppImage Linux (x86_64)
@@ -63,7 +66,7 @@ pub struct NotificationItem {
 ### State Machine Overlay
 - **`Idle`:** Pill compact di top-center atau menyatu seamless dengan tepi atas monitor (`y = 0`) lewat transisi `notch_morph` (`Top Notch` ↔ `Floating Island`), menampilkan mini cover + lirik karaoke (`Original` atau `Romaji` sesuai `karaoke_lyric_mode`, disinkronkan via `duration` LRCLIB, `end_ms` jeda instrumental, & `lyric_offset_ms`) + 3-bar equalizer saat musik diputar (dengan opsi gradasi `#000` ke warna dominan album di paling bawah via `compact_album_gradient`), jam zona waktu, atau jadwal terdekat; otomatis tersembunyi saat `auto_hide` atau `hide_in_fullscreen` aktif.
 - **`Compact`:** Pill melebar menampilkan avatar berwarna brand aplikasi (`WhatsApp`, `Discord`, `Gmail`, browser, dll.), badge nama aplikasi terpisah tanpa overlap, judul, preview singkat, serta indikator jumlah antrean (turut mendukung gradasi `#000` → warna album bila musik aktif & `compact_album_gradient` menyala); timer auto-collapse default 5 detik.
-- **`Expanded`:** Aktif saat hover pada `Compact` (menjeda timer), menampilkan slot kiri/kanan terklip bersih (tab `Home`, `♪ Music`, `☑ N`, `Cal` + tombol cepat ganti mode `Island`/`Notch` + tombol `⚙` yang membawa jendela Settings ke depan layar via `bring_window_to_front`), dan `ScrollArea` pada kolom lirik kanan. Juga menghormati opsi `show_notifications`.
+- **`Expanded`:** Aktif saat hover pada `Compact` (menjeda timer), menampilkan slot kiri/kanan terklip bersih (tab `Home`, `♪ Music`, `☑ N`, `Cal`, `Timer` + tombol cepat ganti mode `Island`/`Notch` + tombol `⚙` yang membawa jendela Settings ke depan layar via `bring_window_to_front`), dan `ScrollArea` pada kolom lirik kanan. Juga menghormati opsi `show_notifications`.
 
 ## Alur Komponen Utama
 1. **Startup:** `config.rs` membaca `config.toml` → `tray.rs` membuat ikon tray → `platform` memunculkan listener notifikasi di background thread/async task → `ui` membuka overlay window dalam state `Idle`.

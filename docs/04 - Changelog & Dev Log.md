@@ -9,6 +9,18 @@ tags:
 # 04 - Changelog & Dev Log
 
 ## 2026-11-26
+### Added
+- `LICENSE.md`, `Cargo.toml`: Menambahkan berkas lisensi resmi **GNU General Public License v3.0** (`GPL-3.0-or-later`, selaras dengan dependensi `kakasi 0.1`).
+- `src/lyrics.rs`, `src/ui/mod.rs`: Menambahkan animasi transisi **fade-up / fade-down** (`240 ms`, cubic ease-out, terklip di dalam baris pill) saat berganti baris lirik dan terjemahan di pill mode (`IdleDisplayMode::Lyrics`: naik ke atas saat maju ke baris berikutnya dan turun ke bawah saat mundur/seek ke baris sebelumnya) beserta unit test `lyric_transition_fades_up_and_down_and_finishes`.
+- `.github/workflows/release.yml`: Menambahkan workflow CI/CD GitHub Actions untuk membangun dan menerbitkan release Windows (`x86_64-pc-windows-msvc` `.zip`) dan Linux (`AppImage` + `.tar.gz`) saat push tag `v*` atau `workflow_dispatch`.
+
+### Fixed
+- `src/main.rs`, `src/tray.rs`, `src/platform/mod.rs`, `src/platform/linux.rs`, `src/ui/mod.rs`, `src/ui/settings.rs`, `src/ui/icons.rs`: Memperbaiki seluruh error kompilasi, kurung kurawal hilang, dan duplikasi blok hasil merge PR (`#10` & `#12`):
+  - `src/platform/mod.rs`, `src/platform/linux.rs`: Menutup blok `pin_window_top_y` & `list_installed_fonts`, memisahkan `detect_overlay_hover` & `is_cursor_in_top_trigger` dari `is_cursor_over_window`, menghapus referensi `linux::position_overlay_window` yang tidak ada, serta menambahkan `spawn_fullscreen_watcher` di Linux (Hyprland IPC).
+  - `src/main.rs`, `src/tray.rs`: Memulihkan `TrayAction::ToggleDockMode` & `update_dock_mode` di `TrayController`, menyatukan signature `TrayController::new`, membersihkan channel duplikat di `main()`, serta memilih kanvas permanen di Windows (`permanent_canvas_size`) dan ukuran dinamis di Linux.
+  - `src/ui/mod.rs`, `src/ui/icons.rs`: Menutup `apply_configured_fonts`, membersihkan duplikasi kode di `step_logic`, `render_island_ui`, `render_idle`, `render_expanded`, `render_overview_tab`, `render_music_tab`, `render_todo_tab`, `paint_island_surface`, `render_pill_tab`, dan `render_playbar`, menambahkan `IconKind::Timer`, serta menjaga `SETTINGS_WINDOW_TITLE` tersedia di Windows dan Linux.
+  - `src/ui/settings.rs`: Menghapus blok tab duplikat tak tertutup di `render_settings_viewport`, meneruskan `installed_fonts` & `font_search` ke `SettingsBodyState` agar pemilih font juga berfungsi di `run_standalone_settings`, serta meneruskan `self.config.accent_color` ke `apply_settings_theme`. Lihat [[01 - Arsitektur & Spesifikasi]] dan [[03 - Catatan Rapat & Keputusan]].
+
 ### Changed
 - `src/ui/mod.rs`, `src/platform/wayland_layer.rs`: Mengganti interpolasi ukuran linier-eksponensial dengan fisika pegas harmonik teredam ala Dynamic Island macOS (`step_spring`, 4 sub-langkah per frame, kekakuan/redaman X & Y sedikit bertahap untuk efek elastis saat expand/collapse/reveal serta `notch_morph`, clip rect konten saat pantulan, dan interval repaint `6 ms` pada `wlr-layer-shell`). Lihat [[01 - Arsitektur & Spesifikasi]] dan [[03 - Catatan Rapat & Keputusan]].
 

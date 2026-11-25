@@ -59,6 +59,7 @@ pub struct LyricsRequest {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ActiveKaraoke<'a> {
+    pub line_index: usize,
     pub text: &'a str,
     pub progress: f32,
     pub next_text: Option<&'a str>,
@@ -210,6 +211,7 @@ pub fn active_karaoke(data: &LyricsData, position_ms: u64) -> Option<ActiveKarao
                 let first = &lines[0];
                 let next_line = lines.get(1);
                 return Some(ActiveKaraoke {
+                    line_index: 0,
                     text: first.text.as_str(),
                     progress: 0.0,
                     next_text: next_line.map(|l| l.text.as_str()),
@@ -219,7 +221,8 @@ pub fn active_karaoke(data: &LyricsData, position_ms: u64) -> Option<ActiveKarao
                     next_translation: next_line.and_then(|l| l.translation.as_deref()),
                 });
             }
-            let curr = &lines[next_idx - 1];
+            let curr_idx = next_idx - 1;
+            let curr = &lines[curr_idx];
             let next_line = lines.get(next_idx);
             let next_ms = next_line
                 .map(|l| l.time_ms)
@@ -236,6 +239,7 @@ pub fn active_karaoke(data: &LyricsData, position_ms: u64) -> Option<ActiveKarao
             };
             let progress = compute_line_progress(curr, position_ms, effective_end_ms);
             Some(ActiveKaraoke {
+                line_index: curr_idx,
                 text: curr.text.as_str(),
                 progress,
                 next_text: next_line.map(|l| l.text.as_str()),
@@ -248,6 +252,7 @@ pub fn active_karaoke(data: &LyricsData, position_ms: u64) -> Option<ActiveKarao
         LyricsData::Plain(lines) => lines.first().map(|first| {
             let next_line = lines.get(1);
             ActiveKaraoke {
+                line_index: 0,
                 text: first.text.as_str(),
                 progress: 1.0,
                 next_text: next_line.map(|l| l.text.as_str()),

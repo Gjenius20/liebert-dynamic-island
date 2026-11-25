@@ -53,7 +53,7 @@ fn main() -> ExitCode {
 
     let demo_mode = args.iter().any(|a| a == "--demo");
     let config = Config::load();
-    let tray = match TrayController::new(config.auto_hide_when_idle) {
+    let tray = match TrayController::new(config.auto_hide_when_idle, config.notch_dock_mode) {
         Ok(t) => Some(t),
         Err(err) => {
             eprintln!("Warning: tray unavailable ({err})");
@@ -61,13 +61,6 @@ fn main() -> ExitCode {
         }
     };
 
-    let (event_tx, event_rx) = mpsc::channel();
-    let (lyrics_req_tx, lyrics_req_rx) = mpsc::channel();
-    let (media_cmd_tx, media_cmd_rx) = mpsc::channel();
-    let (calendar_cmd_tx, calendar_cmd_rx) = mpsc::channel();
-
-    let canvas = ui::permanent_canvas_size(&config);
-    let initial_x = ((platform::primary_monitor_logical_width() - canvas.x) * 0.5).max(0.0);
     let ear_w = if config.notch_dock_mode {
         (12.0 * config.scale).round() * 2.0
     } else {
@@ -137,6 +130,15 @@ fn run_eframe_overlay(
 
     platform::prepare_overlay_rules(WINDOW_TITLE, initial_y);
 
+    let (win_w, win_h, win_x, win_y) = if cfg!(windows) {
+        let canvas = ui::permanent_canvas_size(&config);
+        let x = ((platform::primary_monitor_logical_width(1.0) - canvas.x) * 0.5).max(0.0);
+        let _ = (initial_w, initial_h, initial_x);
+        (canvas.x, canvas.y, x, 0.0)
+    } else {
+        (initial_w, initial_h, initial_x, initial_y)
+    };
+
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Glow,
         viewport: egui::ViewportBuilder::default()
@@ -151,8 +153,8 @@ fn run_eframe_overlay(
             .with_minimize_button(false)
             .with_maximize_button(false)
             .with_close_button(false)
-            .with_inner_size([canvas.x, canvas.y])
-            .with_position([initial_x, 0.0]),
+            .with_inner_size([win_w, win_h])
+            .with_position([win_x, win_y]),
         ..Default::default()
     };
 
