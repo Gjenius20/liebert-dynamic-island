@@ -9,6 +9,9 @@ tags:
 # 04 - Changelog & Dev Log
 
 ## 2026-11-26
+### Changed
+- `src/ui/mod.rs`, `src/platform/wayland_layer.rs`: Mengganti interpolasi ukuran linier-eksponensial dengan fisika pegas harmonik teredam ala Dynamic Island macOS (`step_spring`, 4 sub-langkah per frame, kekakuan/redaman X & Y sedikit bertahap untuk efek elastis saat expand/collapse/reveal serta `notch_morph`, clip rect konten saat pantulan, dan interval repaint `6 ms` pada `wlr-layer-shell`). Lihat [[01 - Arsitektur & Spesifikasi]] dan [[03 - Catatan Rapat & Keputusan]].
+
 ### Added
 - `src/pomodoro.rs`, `src/config.rs`, `src/main.rs`, `src/ui/mod.rs`, `src/ui/settings.rs`: Menambahkan fitur **Pomodoro Timer** (`Focus` / `Short Break` / `Long Break`, siklus 4 sesi, countdown di pill idle `IdleDisplayMode::Pomodoro` & otomatis saat `Auto` berjalan, tab `⏱ Timer`, ringkasan di `Overview`, notifikasi selesai fase, serta slider durasi di Settings) beserta 2 unit test di `src/pomodoro.rs`.
 - `src/platform/mod.rs`, `src/platform/windows.rs`, `src/platform/linux.rs`, `src/config.rs`, `src/ui/mod.rs`, `src/ui/settings.rs`: Menambahkan pilihan **Font** di Settings Appearance (`font_name`) yang memindai font terinstal pada perangkat (`list_installed_fonts`, filter pencarian, dan `apply_configured_fonts`).
