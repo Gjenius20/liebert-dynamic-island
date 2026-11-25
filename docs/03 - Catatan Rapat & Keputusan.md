@@ -77,3 +77,13 @@ Log *Architecture Decision Records (ADR)* untuk proyek [[00 - Dashboard Proyek]]
   2. **Gradient Wash:** `ensure_gradient_texture` menghasilkan tekstur `1×64` yang di-cache dan dirender lewat `RectShape::filled(...).with_texture(...)` dengan corner radius card.
   3. **Wrapped Multi-Line Karaoke:** `render_wrapped_karaoke` menggunakan `egui::text::LayoutJob` dengan segment warna lit/dim per karakter agar karaoke tetap rapi meski baris panjang mengalami word-wrap.
 - **Konsekuensi:** Ukuran expanded card saat di tab Musik melebar ke `436×308` (dikalikan `scale`), dan pengguna tetap bisa menonaktifkan `dynamic_album_color` atau memilih preset `"Crimson"` di Settings.
+
+## ADR-008: Migrasi Tray Linux ke `ksni` & Integrasi Hyprland IPC
+- **Tanggal:** 2026-11-25
+- **Status:** Accepted
+- **Konteks:** Pada Linux Hyprland (CachyOS), aplikasi gagal berjalan saat startup karena `tray-icon 0.27` default memakai backend `libappindicator`/GTK3 yang panik (`GTK has not been initialized`) sebelum `eframe`/`winit` berjalan. Selain itu, Wayland mengabaikan `OuterPosition` serta mengunci ukuran saat `with_resizable(false)`, sehingga pill terjebak di tengah layar dan tidak membesar.
+- **Keputusan:**
+  1. Mengubah dependensi `tray-icon` menjadi `default-features = false, features = ["ksni"]` agar tray Linux berjalan lewat D-Bus `StatusNotifierItem` murni tanpa GTK (backend Windows/macOS tetap native).
+  2. Menambahkan bridge UNIX IPC socket Hyprland (`$XDG_RUNTIME_DIR/hypr/$HYPRLAND_INSTANCE_SIGNATURE/.socket.sock`) di `src/platform/linux.rs` untuk mendaftarkan `window_rule` (`float`, `pin`, `no_initial_focus`, `no_blur`, `no_shadow`, `border_size=0`, `no_anim`, `move`), menyinkronkan `resize` + `move` saat ukuran pill berubah, membaca resolusi monitor/posisi kursor (`is_cursor_over_window`, `is_cursor_in_top_trigger`), dan mendeteksi fullscreen (`j/activewindow`).
+  3. Mengaktifkan `.with_resizable(cfg!(target_os = "linux"))` di `src/main.rs` agar Wayland `xdg_toplevel` tidak mengunci `min_size == max_size`.
+- **Konsekuensi:** Aplikasi dan AppImage berjalan tanpa panic GTK di Hyprland serta otomatis berada di top-center dan responsif berubah ukuran; compositor Wayland non-Hyprland tetap menunggu implementasi `wlr-layer-shell`.

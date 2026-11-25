@@ -535,6 +535,16 @@ impl eframe::App for IslandApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         if !self.no_activate_applied {
             platform::apply_no_activate_hook(WINDOW_TITLE);
+            let screen_w =
+                platform::primary_monitor_logical_width() / ctx.pixels_per_point().max(1.0);
+            let x = ((screen_w - self.current_size.x) * 0.5).max(0.0);
+            platform::position_overlay_window(
+                WINDOW_TITLE,
+                x,
+                self.config.top_offset_px,
+                self.current_size.x,
+                self.current_size.y,
+            );
             self.no_activate_applied = true;
         }
 
@@ -574,6 +584,7 @@ impl eframe::App for IslandApp {
         self.state.tick(now);
 
         let visible = self.state.should_be_visible(now);
+        let became_visible = visible && !self.last_visible;
         if visible != self.last_visible {
             self.last_visible = visible;
             ctx.send_viewport_cmd(ViewportCommand::Visible(visible));
@@ -587,7 +598,10 @@ impl eframe::App for IslandApp {
             self.current_size = target;
         }
 
-        if (self.current_size - self.applied_size).length_sq() > 0.25 || hover_changed {
+        if (self.current_size - self.applied_size).length_sq() > 0.25
+            || hover_changed
+            || became_visible
+        {
             self.applied_size = self.current_size;
             let screen_w =
                 platform::primary_monitor_logical_width() / ctx.pixels_per_point().max(1.0);
@@ -597,6 +611,15 @@ impl eframe::App for IslandApp {
                 x,
                 self.config.top_offset_px,
             )));
+            if visible {
+                platform::position_overlay_window(
+                    WINDOW_TITLE,
+                    x,
+                    self.config.top_offset_px,
+                    self.current_size.x,
+                    self.current_size.y,
+                );
+            }
         }
 
         let playing_lyrics = self.config.show_lyrics

@@ -15,7 +15,7 @@ Referensi cakupan fitur: [[PRD-LiebertDynamicIsland-MVP]].
 ### Fase 1: Setup Proyek & Technical Spike
 - [x] Inisialisasi `Cargo.toml` dan skeleton modul (`src/main.rs`, `src/config.rs`, `src/state.rs`, `src/tray.rs`, `src/ui/`, `src/platform/`)
 - [x] Spike Windows: uji `UserNotificationListener::Current()` pada `.exe` unpackaged vs Sparse Package/MSIX manifest *(lulus di `.exe` unpackaged: `Access: Allowed`, `21` active toasts terbaca)*
-- [ ] Spike Linux: uji D-Bus `org.freedesktop.Notifications` (`zbus`) & overlay `wlr-layer-shell` (Wayland) / dock (X11) di environment Linux *(koneksi D-Bus sesi lolos via `--spike-notifications`, tetapi overlay Wayland/X11 & klaim nama belum diuji manual; nama notifikasi saat ini dipegang daemon lain)*
+- [ ] Spike Linux: uji D-Bus `org.freedesktop.Notifications` (`zbus`) & overlay `wlr-layer-shell` (Wayland) / dock (X11) di environment Linux *(koneksi D-Bus sesi lolos via `--spike-notifications`, dan overlay Hyprland Wayland + `ksni` tray terverifikasi live; klaim nama `org.freedesktop.Notifications` masih menunggu daemon incumbent dihentikan)*
 - [x] Finalisasi pilihan renderer Rust (`eframe 0.37` + `Renderer::Glow`) di [[03 - Catatan Rapat & Keputusan]]
 
 ### Fase 2: Core Features
