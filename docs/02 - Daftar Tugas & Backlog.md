@@ -29,7 +29,7 @@ Referensi cakupan fitur: [[PRD-LiebertDynamicIsland-MVP]].
 - [x] Implementasikan interaksi: auto-collapse 5 detik, hover expand & pause timer, serta tombol `Dismiss`
 
 ### Fase 4: Testing & Release
-- [x] Tambahkan unit test state machine, config, clock, lyrics, todo, calendar, & album accent (`cargo test` — 25 tests passed)
+- [x] Tambahkan unit test state machine, config, clock, lyrics, todo, calendar, & album accent (`cargo test` — 27 tests passed)
 - [ ] Uji manual edge cases: multi-notifikasi berurutan, teks panjang/Unicode, multi-DPI scaling, hover expand live, top-edge hover reveal saat auto-hide, Spotify lyrics, & Google Calendar `.ics`
 - [ ] Verifikasi target performa `--release`: RAM idle `< 25 MB`, CPU idle `< 0.5%`, latency `< 150 ms`
 - [ ] Perbarui `README.md` (cara build, izin Windows, catatan daemon Linux) & lakukan smoke test binary Windows + Linux
@@ -41,6 +41,7 @@ Referensi cakupan fitur: [[PRD-LiebertDynamicIsland-MVP]].
 - [x] **Top-Edge Notch Dock Mode, Offline Romaji Fix & UI Polish:** Mode notch menempel tepi atas layar (`y = 0`) dengan telinga cekung + mini cover + 3-bar equalizer (sembunyi saat fullscreen), romanisasi offline `kakasi`+`any_ascii` untuk Kanji/Kana/Cina/Korea/Arab, pemindahan toggle Karaoke/Romaji/Translate ke popup Settings saja, dan polish UI menyeluruh
 - [x] **Seamless Win11 Notch, Romaji Karaoke Mode, Branded Notification Popups & Morphing Transition:** Penghapusan border/rounding DWM Windows 11 + `pin_window_top_y(..., 0)` agar menyatu sempurna di tepi atas layar, pilihan `KaraokeLyricMode` (`Original` vs `Romaji`), listener notifikasi WinRT + fallback polling `500 ms` dengan popup berwarna brand (`WhatsApp`, `Discord`, `Gmail`, browser) + `Test Popup`, serta morphing halus `Top Notch` ↔ `Floating Island` (`notch_morph`)
 - [x] **Perbaikan Stabilitas Win32 Hover, Anti-Overlap UI, Sinkronisasi Romaji & Akses Settings:** Penghapusan `DWMNCRP_DISABLED` & tombol caption Win32 (`WS_SYSMENU|WS_MINIMIZEBOX|WS_MAXIMIZEBOX`) agar tidak glitch saat hover, ekstrapolasi `LastUpdatedTime` SMTC + match durasi LRCLIB + `end_ms` jeda instrumental + `lyric_offset_ms` + dual-galley wrapped karaoke, layout header/kolom terklip rapi (`ScrollArea` lirik), serta aktivasi foreground jendela Settings (`bring_window_to_front`)
+- [x] **Responsivitas Tombol Linux, Pemisahan Logika OS & Ikon Vektor (`src/ui/icons.rs`):** Pemisahan penuh bridge overlay/hover/fokus/font Windows vs Linux di `src/platform/`, perbaikan `.with_resizable` Wayland + fast-path hover nol-IPC & cache/throttle Hyprland IPC + hitbox tombol nyaman (`CursorIcon::PointingHand`), ikon vektor `Painter` bebas tofu, serta penemuan font lintas distro Linux (`NotoSans`, `NotoSansMono`, `NotoSansSymbols`, `NotoSansCJK` multi-index `.ttc` + `fc-match`)
 - [x] **Menu Settings:** Secondary viewport untuk ukuran, warna, tema preset, corner radius, dan toggle modul (`src/ui/settings.rs`)
 - [x] **Todo List:** Checklist lokal dengan persistensi `todos.toml` (`src/todo.rs`)
 - [x] **Google Calendar:** Sync feed Secret iCal `.ics` + upcoming events & alert 5 menit (`src/calendar.rs`)

@@ -57,14 +57,14 @@ fn main() -> ExitCode {
     };
     let initial_w = config.idle_width * config.scale + ear_w;
     let initial_h = 30.0 * config.scale;
-    let initial_x = ((platform::primary_monitor_logical_width() - initial_w) * 0.5).max(0.0);
+    let initial_x = ((platform::primary_monitor_logical_width(1.0) - initial_w) * 0.5).max(0.0);
     let initial_y = if config.notch_dock_mode {
         0.0
     } else {
         config.top_offset_px
     };
 
-    platform::prepare_overlay_rules(WINDOW_TITLE, config.top_offset_px);
+    platform::prepare_overlay_rules(WINDOW_TITLE, initial_y);
 
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Glow,
@@ -75,7 +75,7 @@ fn main() -> ExitCode {
             .with_always_on_top()
             .with_taskbar(false)
             .with_active(false)
-            .with_resizable(false)
+            .with_resizable(platform::overlay_resizable())
             .with_minimize_button(false)
             .with_maximize_button(false)
             .with_close_button(false)

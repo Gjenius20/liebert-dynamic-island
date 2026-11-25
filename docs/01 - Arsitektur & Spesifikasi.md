@@ -34,12 +34,13 @@ liebert-dynamic-island/
     ├── calendar.rs              # RFC 5545 .ics parser & Google Calendar sync worker
     ├── tray.rs                  # System tray menu & lifecycle control
     ├── ui/
-    │   ├── mod.rs               # Overlay pill (Idle/Compact/Expanded tabs) & Win32 hover fix
+    │   ├── mod.rs               # Overlay pill (Idle/Compact/Expanded tabs) & UI loop
+    │   ├── icons.rs             # Crisp Painter-drawn vector icons & responsive icon buttons
     │   └── settings.rs          # Secondary viewport Settings (Appearance, Todo, Calendar)
     └── platform/
-        ├── mod.rs               # Facade lintas OS, MediaTrack, & PlatformEvent
-        ├── windows.rs           # Win32 hover/no-activate, WinRT Notifications & SMTC
-        └── linux.rs             # D-Bus Notifications & MPRIS2 media reader
+        ├── mod.rs               # Facade lintas OS (overlay, hover, font, MediaTrack, PlatformEvent)
+        ├── windows.rs           # Win32 hover/no-activate/DWM, WinRT Notifications & SMTC
+        └── linux.rs             # D-Bus Notifications, MPRIS2, Hyprland IPC cache, & fontconfig lookup
 ```
 
 ## Skema Data & State Machine

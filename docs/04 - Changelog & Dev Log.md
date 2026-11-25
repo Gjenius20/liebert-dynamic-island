@@ -8,6 +8,17 @@ tags:
 
 # 04 - Changelog & Dev Log
 
+## 2026-11-26
+### Added
+- `src/ui/icons.rs`: Menambahkan renderer ikon vektor presisi berbasis `egui::Painter` (`IconKind`: `Settings`, `MusicNote`, `TodoCheck`, `Calendar`, `Shuffle`, `Previous`, `Play`, `Pause`, `Next`, `Repeat`, `RepeatOne`, `Close`, `Dot`) beserta helper `icon_button` dengan hitbox nyaman dan `CursorIcon::PointingHand`. Lihat [[01 - Arsitektur & Spesifikasi]] dan [[03 - Catatan Rapat & Keputusan]].
+
+### Changed
+- `src/platform/mod.rs`, `src/platform/windows.rs`, `src/platform/linux.rs`, `src/main.rs`, `src/ui/mod.rs`: Memisahkan penuh logika overlay, hover polling, sinkronisasi geometri jendela, fokus Settings, dan penemuan font antara Windows dan Linux (`overlay_resizable`, `should_send_outer_position`, `primary_monitor_logical_width`, `apply_overlay_window_setup`, `sync_overlay_window`, `detect_overlay_hover`, `bring_window_to_front`, `base_fallback_fonts`, `cjk_fallback_fonts`). Lihat [[01 - Arsitektur & Spesifikasi]] dan [[03 - Catatan Rapat & Keputusan]].
+
+### Fixed
+- `src/main.rs`, `src/platform/linux.rs`, `src/ui/mod.rs`, `src/ui/settings.rs`: Memperbaiki tombol yang kurang responsif di Linux dengan mengembalikan `.with_resizable(platform::overlay_resizable())` (`true` di Linux agar permukaan `xdg_toplevel` Wayland berubah ukuran sesuai UI), menghilangkan spam 5–7 panggilan UNIX socket Hyprland per frame lewat fast-path pointer native (`ctx_hovered` / `pointer_busy`) dan cache/throttle IPC (`50–500 ms`), membungkus tombol transport/tab/overview/playbar dengan hitbox lebih luas dan `CursorIcon::PointingHand`, memperlebar slot kanan header agar tidak terklip oleh metrik font Linux, menggunakan `top_y` efektif pada sinkronisasi jendela, serta memperbaiki urutan konsumsi `settings_focus_requested` dan dispatch `focuswindow` Hyprland saat membuka Settings. Lihat [[03 - Catatan Rapat & Keputusan]].
+- `src/platform/linux.rs`, `src/ui/mod.rs`: Memperbaiki bug font dan ikon di Linux dengan mengganti seluruh ikon kontrol/tab/status yang sebelumnya memakai emoji/simbol Unicode rentan tofu (`⚙`, `♪`, `☑`, `📅`, `🔀`, `⏮`, `⏸`, `▶`, `⏭`, `🔁`, `🔂`, `×`, `●`) menjadi ikon vektor `src/ui/icons.rs`, serta memperbaiki penemuan path font lintas distro (`/usr/share/fonts/noto/`, `/usr/share/fonts/TTF/`, `/usr/share/fonts/noto-cjk/`, `/usr/share/fonts/truetype/`, plus fallback `fc-match`) termasuk pemuatan indeks wajah CJK `0..=3` (`JP`, `KR`, `SC`, `TC`) pada `NotoSansCJK-Regular.ttc` via `FontData::from_blob`. Lihat [[01 - Arsitektur & Spesifikasi]] dan [[03 - Catatan Rapat & Keputusan]].
+
 ## 2026-11-25
 ### Fixed
 - `Cargo.toml`, `Cargo.lock`: Mengganti `tray-icon` ke `default-features = false, features = ["ksni"]` untuk mengatasi panic startup di Linux/Hyprland (`GTK has not been initialized. Call gtk::init first`) sekaligus menghilangkan ketergantungan runtime GTK3/libappindicator. Lihat [[03 - Catatan Rapat & Keputusan]].

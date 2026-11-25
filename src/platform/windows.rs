@@ -38,7 +38,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::HSTRING;
 
 use crate::platform::{
-    AlbumArt, MediaCommand, MediaTrack, PlatformEvent, RepeatMode, decode_album_art,
+    AlbumArt, FontFamilyTarget, FontFileSpec, HoverPollInput, MediaCommand, MediaTrack,
+    PlatformEvent, RepeatMode, decode_album_art,
 };
 use crate::state::{ListenerStatus, NotificationItem};
 
@@ -511,9 +512,74 @@ fn read_smtc_thumbnail(
     decode_album_art(&buf)
 }
 
-pub fn primary_monitor_logical_width() -> f32 {
+pub fn primary_monitor_logical_width(pixels_per_point: f32) -> f32 {
     let px = unsafe { GetSystemMetrics(SM_CXSCREEN) };
-    if px > 0 { px as f32 } else { 1920.0 }
+    let logical = if px > 0 { px as f32 } else { 1920.0 };
+    logical / pixels_per_point.max(1.0)
+}
+
+pub fn sync_overlay_window(
+    window_title: &str,
+    _x_logical: f32,
+    _y_logical: f32,
+    _w_logical: f32,
+    _h_logical: f32,
+    notch_dock_mode: bool,
+) {
+    if notch_dock_mode {
+        pin_window_top_y(window_title, 0);
+    }
+}
+
+pub fn detect_overlay_hover(input: HoverPollInput<'_>) -> bool {
+    let top_trigger = is_cursor_in_top_trigger(
+        input.top_offset_px,
+        input.trigger_width_px,
+        input.pixels_per_point,
+    );
+    if !input.visible {
+        return top_trigger.unwrap_or(false);
+    }
+    if input.pointer_busy {
+        return true;
+    }
+    let pad = if input.currently_hovered { 6 } else { 0 };
+    let over_win = is_cursor_over_window(input.window_title, pad).unwrap_or(input.ctx_hovered);
+    over_win || (input.currently_hovered && top_trigger.unwrap_or(false))
+}
+
+pub fn base_fallback_fonts() -> Vec<FontFileSpec> {
+    vec![
+        FontFileSpec {
+            name: "win_segoe_ui".to_owned(),
+            path: "C:\\Windows\\Fonts\\segoeui.ttf".to_owned(),
+            family: FontFamilyTarget::Both,
+            face_indices: &[0],
+        },
+        FontFileSpec {
+            name: "win_segoe_sym".to_owned(),
+            path: "C:\\Windows\\Fonts\\seguisym.ttf".to_owned(),
+            family: FontFamilyTarget::Both,
+            face_indices: &[0],
+        },
+    ]
+}
+
+pub fn cjk_fallback_fonts() -> Vec<FontFileSpec> {
+    vec![
+        FontFileSpec {
+            name: "win_msgothic".to_owned(),
+            path: "C:\\Windows\\Fonts\\msgothic.ttc".to_owned(),
+            family: FontFamilyTarget::Both,
+            face_indices: &[0],
+        },
+        FontFileSpec {
+            name: "win_malgun".to_owned(),
+            path: "C:\\Windows\\Fonts\\malgun.ttf".to_owned(),
+            family: FontFamilyTarget::Both,
+            face_indices: &[0],
+        },
+    ]
 }
 
 pub fn apply_no_activate_hook(window_title: &str) {
