@@ -885,13 +885,11 @@ impl eframe::App for IslandApp {
                 self.last_egui_hovered = ui.rect_contains_pointer(card_rect);
 
                 let (pad_x, pad_y) = if is_music_card {
-                    let floating_bg = [30, 29, 28, self.config.bg_color[3].max(240)];
-                    let docked_bg = [12, 12, 14, 252];
                     let base_bg = [
-                        lerp_u8(floating_bg[0], docked_bg[0], self.notch_morph),
-                        lerp_u8(floating_bg[1], docked_bg[1], self.notch_morph),
-                        lerp_u8(floating_bg[2], docked_bg[2], self.notch_morph),
-                        lerp_u8(floating_bg[3], docked_bg[3], self.notch_morph),
+                        self.config.bg_color[0],
+                        self.config.bg_color[1],
+                        self.config.bg_color[2],
+                        self.config.bg_color[3].max(235),
                     ];
                     let accent_rgb = self.effective_accent_rgb();
                     self.ensure_gradient_texture(&ctx, base_bg, accent_rgb);
@@ -911,17 +909,7 @@ impl eframe::App for IslandApp {
                     );
                     (16.0 + ear_w, 10.0)
                 } else {
-                    let base = self.bg_color32();
-                    let fill = if self.state.visual == IslandVisualState::Idle {
-                        Color32::from_rgba_unmultiplied(
-                            lerp_u8(base.r(), 7, self.notch_morph),
-                            lerp_u8(base.g(), 7, self.notch_morph),
-                            lerp_u8(base.b(), 9, self.notch_morph),
-                            lerp_u8(base.a(), 252, self.notch_morph),
-                        )
-                    } else {
-                        base
-                    };
+                    let fill = self.bg_color32();
                     paint_island_surface(
                         ui.painter(),
                         card_rect,
@@ -1720,58 +1708,65 @@ impl IslandApp {
             }
 
             ui.add_space(10.0 * s);
-            ui.horizontal(|ui| {
-                let total_btn_w = (88.0 + 66.0 + 60.0) * s + 12.0 * s;
-                let pad = ((ui.available_width() - total_btn_w) * 0.5).max(0.0);
-                ui.add_space(pad);
-                let toggle_label = if self.pomodoro.running { "Pause" } else { "Start" };
-                if ui
-                    .add(
-                        egui::Button::new(
-                            RichText::new(toggle_label)
-                                .font(FontId::proportional(12.0 * s))
-                                .color(Color32::WHITE)
-                                .strong(),
+            let gap = 6.0 * s;
+            let total_btn_w = (88.0 + 66.0 + 60.0) * s + gap * 2.0;
+            ui.allocate_ui_with_layout(
+                Vec2::new(total_btn_w, 28.0 * s),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    ui.spacing_mut().item_spacing.x = gap;
+                    let toggle_label = if self.pomodoro.running { "Pause" } else { "Start" };
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                RichText::new(toggle_label)
+                                    .font(FontId::proportional(12.0 * s))
+                                    .color(Color32::WHITE)
+                                    .strong(),
+                            )
+                            .min_size(Vec2::new(88.0 * s, 26.0 * s))
+                            .fill(phase_col)
+                            .corner_radius(CornerRadius::same(13)),
                         )
-                        .min_size(Vec2::new(88.0 * s, 26.0 * s))
-                        .fill(phase_col)
-                        .corner_radius(CornerRadius::same(13)),
-                    )
-                    .clicked()
-                {
-                    self.pomodoro.toggle(now);
-                }
-                if ui
-                    .add(
-                        egui::Button::new(
-                            RichText::new("Reset")
-                                .font(FontId::proportional(11.5 * s))
-                                .color(text_col),
+                        .clicked()
+                    {
+                        self.pomodoro.toggle(now);
+                        ui.ctx().request_repaint();
+                    }
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                RichText::new("Reset")
+                                    .font(FontId::proportional(11.5 * s))
+                                    .color(text_col),
+                            )
+                            .min_size(Vec2::new(66.0 * s, 26.0 * s))
+                            .fill(Color32::from_rgba_unmultiplied(255, 255, 255, 22))
+                            .corner_radius(CornerRadius::same(13)),
                         )
-                        .min_size(Vec2::new(66.0 * s, 26.0 * s))
-                        .fill(Color32::from_rgba_unmultiplied(255, 255, 255, 18))
-                        .corner_radius(CornerRadius::same(13)),
-                    )
-                    .clicked()
-                {
-                    self.pomodoro.reset();
-                }
-                if ui
-                    .add(
-                        egui::Button::new(
-                            RichText::new("Skip")
-                                .font(FontId::proportional(11.5 * s))
-                                .color(muted),
+                        .clicked()
+                    {
+                        self.pomodoro.reset();
+                        ui.ctx().request_repaint();
+                    }
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                RichText::new("Skip")
+                                    .font(FontId::proportional(11.5 * s))
+                                    .color(muted),
+                            )
+                            .min_size(Vec2::new(60.0 * s, 26.0 * s))
+                            .fill(Color32::from_rgba_unmultiplied(255, 255, 255, 14))
+                            .corner_radius(CornerRadius::same(13)),
                         )
-                        .min_size(Vec2::new(60.0 * s, 26.0 * s))
-                        .fill(Color32::from_rgba_unmultiplied(255, 255, 255, 12))
-                        .corner_radius(CornerRadius::same(13)),
-                    )
-                    .clicked()
-                {
-                    self.pomodoro.skip();
-                }
-            });
+                        .clicked()
+                    {
+                        self.pomodoro.skip();
+                        ui.ctx().request_repaint();
+                    }
+                },
+            );
 
             ui.add_space(8.0 * s);
             let cycle_done = self.pomodoro.completed_focus % 4;

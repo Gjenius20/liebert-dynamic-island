@@ -81,6 +81,8 @@ impl PomodoroTimer {
     pub fn reset(&mut self) {
         self.running = false;
         self.last_tick = None;
+        self.phase = PomodoroPhase::Focus;
+        self.completed_focus = 0;
         let secs = self.phase_duration_secs(self.phase);
         self.total_secs = secs;
         self.remaining_secs = secs;
@@ -194,5 +196,11 @@ mod tests {
             }
         }
         assert_eq!(p.completed_focus, 4);
+
+        p.reset();
+        assert_eq!(p.phase, PomodoroPhase::Focus);
+        assert_eq!(p.completed_focus, 0);
+        assert!(!p.running);
+        assert_eq!(p.format_mm_ss(), "01:00");
     }
 }
