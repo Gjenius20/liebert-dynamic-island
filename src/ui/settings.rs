@@ -6,6 +6,7 @@ use crate::calendar::{CalendarCommand, CalendarEvent, format_countdown, format_l
 use crate::clock::{COMMON_TIMEZONES, format_clock, is_valid_timezone};
 use crate::config::{Config, IdleDisplayMode, KaraokeLyricMode};
 use crate::lyrics::TRANSLATE_LANGUAGES;
+use crate::platform::InstalledFont;
 use crate::todo::TodoStore;
 
 pub const SETTINGS_WINDOW_TITLE: &str = "Liebert Dynamic Island — Settings";
@@ -30,6 +31,8 @@ pub struct SettingsWindowState<'a> {
     pub calendar_cmd_tx: &'a mpsc::Sender<CalendarCommand>,
     pub config_dirty: &'a mut bool,
     pub test_notification_requested: &'a mut bool,
+    pub installed_fonts: &'a mut Vec<InstalledFont>,
+    pub font_search: &'a mut String,
 }
 
 pub fn render_settings_viewport(ctx: &egui::Context, st: SettingsWindowState<'_>) {
@@ -79,6 +82,8 @@ pub fn render_settings_viewport(ctx: &egui::Context, st: SettingsWindowState<'_>
                         st.config,
                         st.config_dirty,
                         st.test_notification_requested,
+                        st.installed_fonts,
+                        st.font_search,
                     ),
                     SettingsTab::Todo => {
                         render_todo_tab(ui, st.todos, st.new_todo_input);
@@ -103,7 +108,12 @@ fn render_appearance_tab(
     config: &mut Config,
     config_dirty: &mut bool,
     test_notification_requested: &mut bool,
+    installed_fonts: &mut Vec<InstalledFont>,
+    font_search: &mut String,
 ) {
+    if installed_fonts.is_empty() {
+        *installed_fonts = crate::platform::list_installed_fonts();
+    }
     let mut changed = false;
 
     ui.label(RichText::new("Display Mode (Notch / Dynamic Island)").strong());
@@ -219,6 +229,44 @@ fn render_appearance_tab(
         .changed();
 
     ui.add_space(8.0);
+    ui.label(RichText::new("Font (Installed on Device)").strong());
+    ui.horizontal(|ui| {
+        ui.add(
+            egui::TextEdit::singleline(font_search)
+                .hint_text("Filter fonts...")
+                .desired_width(130.0),
+        );
+        let selected_font = if config.font_name.is_empty() {
+            "System Default"
+        } else {
+            config.font_name.as_str()
+        };
+        let query = font_search.trim().to_ascii_lowercase();
+        egui::ComboBox::from_id_salt("device_font_selector")
+            .selected_text(selected_font)
+            .width(235.0)
+            .show_ui(ui, |ui| {
+                if ui
+                    .selectable_label(config.font_name.is_empty(), "System Default")
+                    .clicked()
+                    && !config.font_name.is_empty()
+                {
+                    config.font_name.clear();
+                    changed = true;
+                }
+                for f in installed_fonts.iter().filter(|f| {
+                    query.is_empty() || f.name.to_ascii_lowercase().contains(&query)
+                }) {
+                    let is_sel = config.font_name.eq_ignore_ascii_case(&f.name);
+                    if ui.selectable_label(is_sel, &f.name).clicked() && !is_sel {
+                        config.font_name = f.name.clone();
+                        changed = true;
+                    }
+                }
+            });
+    });
+
+    ui.add_space(8.0);
     ui.label(RichText::new("Idle Display & Clock").strong());
     egui::ComboBox::from_id_salt("idle_display_mode")
         .selected_text(config.idle_display.label())
@@ -228,6 +276,7 @@ fn render_appearance_tab(
                 IdleDisplayMode::Clock,
                 IdleDisplayMode::Lyrics,
                 IdleDisplayMode::NextEvent,
+                IdleDisplayMode::Pomodoro,
                 IdleDisplayMode::Minimal,
             ] {
                 if ui
@@ -357,7 +406,11 @@ fn render_appearance_tab(
                     egui::ComboBox::from_id_salt("karaoke_lyric_mode")
                         .selected_text(config.karaoke_lyric_mode.label())
                         .show_ui(ui, |ui| {
-                            for mode in [KaraokeLyricMode::Original, KaraokeLyricMode::Romaji] {
+                            for mode in [
+                                KaraokeLyricMode::Original,
+                                KaraokeLyricMode::Romaji,
+                                KaraokeLyricMode::Translate,
+                            ] {
                                 if ui
                                     .selectable_value(
                                         &mut config.karaoke_lyric_mode,
@@ -417,6 +470,28 @@ fn render_appearance_tab(
     changed |= ui
         .checkbox(&mut config.show_calendar, "Show Google Calendar tab")
         .changed();
+    changed |= ui
+        .checkbox(&mut config.show_pomodoro, "Show Pomodoro Timer tab")
+        .changed();
+    if config.show_pomodoro {
+        ui.indent("pomodoro_sub_opts", |ui| {
+            changed |= ui
+                .add(egui::Slider::new(&mut config.pomodoro_focus_mins, 1..=120).text("Focus (min)"))
+                .changed();
+            changed |= ui
+                .add(
+                    egui::Slider::new(&mut config.pomodoro_short_break_mins, 1..=60)
+                        .text("Short Break (min)"),
+                )
+                .changed();
+            changed |= ui
+                .add(
+                    egui::Slider::new(&mut config.pomodoro_long_break_mins, 1..=90)
+                        .text("Long Break (min)"),
+                )
+                .changed();
+        });
+    }
 
     if ui.button("Reset to Defaults").clicked() {
         let keep_url = config.google_calendar_ics_url.clone();

@@ -31,6 +31,7 @@ liebert-dynamic-island/
     ├── clock.rs                 # Jam digital & formatter zona waktu IANA (chrono-tz)
     ├── lyrics.rs                # LRC / Enhanced LRC parser, karaoke progress, romaji & translate worker
     ├── todo.rs                  # TodoStore & persistensi todos.toml
+    ├── pomodoro.rs              # PomodoroTimer (Focus/Short/Long Break & siklus 4 sesi)
     ├── calendar.rs              # RFC 5545 .ics parser & Google Calendar sync worker
     ├── tray.rs                  # System tray menu & lifecycle control
     ├── ui/

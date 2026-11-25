@@ -157,10 +157,10 @@ impl IslandState {
             return false;
         }
         self.fullscreen_active = active;
+        self.idle_since = Instant::now();
         if active && self.hide_in_fullscreen && self.active.is_none() {
             self.hovered = false;
             self.visual = IslandVisualState::Idle;
-            self.idle_since = Instant::now();
         }
         true
     }
@@ -390,5 +390,19 @@ mod tests {
 
         assert!(state.set_hovered(false, t0 + Duration::from_secs(1)));
         assert_eq!(state.visual, IslandVisualState::Idle);
+    }
+
+    #[test]
+    fn fullscreen_exit_resets_idle_since_for_auto_hide_delay() {
+        let mut state = IslandState::new(true, Duration::from_secs(5));
+        state.set_auto_hide_delay(Duration::from_secs(4));
+        state.set_hide_in_fullscreen(true);
+
+        assert!(state.set_fullscreen_active(true));
+        assert!(!state.should_be_visible(Instant::now()));
+
+        // When exiting fullscreen, idle_since resets so the notch stays visible for auto_hide_delay.
+        assert!(state.set_fullscreen_active(false));
+        assert!(state.should_be_visible(Instant::now()));
     }
 }

@@ -21,7 +21,8 @@ use crate::config::{Config, IdleDisplayMode, KaraokeLyricMode};
 use crate::lyrics::{
     LyricsData, LyricsRequest, active_karaoke, has_cjk_or_hangul,
 };
-use crate::platform::{self, MediaCommand, MediaTrack, PlatformEvent, RepeatMode};
+use crate::platform::{self, InstalledFont, MediaCommand, MediaTrack, PlatformEvent, RepeatMode};
+use crate::pomodoro::{PomodoroPhase, PomodoroTimer};
 use crate::state::{IslandState, IslandVisualState, ListenerStatus, NotificationItem};
 use crate::todo::TodoStore;
 use crate::tray::{TrayAction, TrayController};
@@ -30,6 +31,25 @@ use crate::ui::settings::{
 };
 
 pub const WINDOW_TITLE: &str = "Liebert Dynamic Island";
+
+pub fn apply_configured_fonts(ctx: &egui::Context, font_name: &str) {
+    let mut defs = egui::FontDefinitions::default();
+    if !font_name.trim().is_empty()
+        && let Some(found) = platform::list_installed_fonts()
+            .into_iter()
+            .find(|f| f.name.eq_ignore_ascii_case(font_name.trim()))
+        && let Ok(bytes) = std::fs::read(&found.path)
+    {
+        let key = "user_selected_font".to_owned();
+        defs.font_data
+            .insert(key.clone(), std::sync::Arc::new(egui::FontData::from_owned(bytes)));
+        if let Some(fam) = defs.families.get_mut(&egui::FontFamily::Proportional) {
+            fam.insert(0, key);
+        }
+    }
+    ctx.set_fonts(defs);
+    install_base_fallback_fonts(ctx);
+}
 
 pub fn install_base_fallback_fonts(ctx: &egui::Context) {
     #[cfg(windows)]
@@ -83,6 +103,7 @@ enum IslandTab {
     Music,
     Todo,
     Calendar,
+    Pomodoro,
 }
 
 /// Fixed transparent window size big enough for the largest card, so hover/notch animations
@@ -137,6 +158,10 @@ pub struct IslandApp {
     last_visible: bool,
     last_egui_hovered: bool,
     demo_deadline: Option<Instant>,
+    pomodoro: PomodoroTimer,
+    installed_fonts: Vec<InstalledFont>,
+    font_search: String,
+    applied_font_name: String,
 }
 
 impl IslandApp {
@@ -161,6 +186,12 @@ impl IslandApp {
         let initial_h = 30.0 * config.scale;
         let initial_size = Vec2::new(initial_w, initial_h);
         let notch_morph = if config.notch_dock_mode { 1.0 } else { 0.0 };
+        let pomodoro = PomodoroTimer::new(
+            config.pomodoro_focus_mins,
+            config.pomodoro_short_break_mins,
+            config.pomodoro_long_break_mins,
+        );
+        let applied_font_name = config.font_name.clone();
 
         Self {
             config,
@@ -200,6 +231,10 @@ impl IslandApp {
             last_visible: true,
             last_egui_hovered: false,
             demo_deadline: demo_mode.then(|| now + Duration::from_secs(1)),
+            pomodoro,
+            installed_fonts: Vec::new(),
+            font_search: String::new(),
+            applied_font_name,
         }
     }
 
@@ -208,6 +243,8 @@ impl IslandApp {
             IdleDisplayMode::Auto => {
                 if self.config.show_lyrics && self.media.is_some() {
                     IdleDisplayMode::Lyrics
+                } else if self.config.show_pomodoro && self.pomodoro.running {
+                    IdleDisplayMode::Pomodoro
                 } else {
                     IdleDisplayMode::Clock
                 }
@@ -337,9 +374,8 @@ impl IslandApp {
         let Some((artist, title)) = self.last_lyrics_key.clone() else {
             return;
         };
-        let translate_lang = self
-            .config
-            .translate_lyrics
+        let translate_lang = (self.config.translate_lyrics
+            || self.config.karaoke_lyric_mode == KaraokeLyricMode::Translate)
             .then(|| self.config.lyric_translate_lang.clone());
         let duration_secs = self
             .media
@@ -666,6 +702,34 @@ impl eframe::App for IslandApp {
         let fs = self.config.hide_in_fullscreen && self.last_fullscreen_raw;
         let fs_changed = self.state.set_fullscreen_active(fs);
 
+        if let Some(finished_phase) = self.pomodoro.tick(now) {
+            let (title, body) = match finished_phase {
+                PomodoroPhase::Focus => (
+                    "Focus Session Complete",
+                    format!(
+                        "Completed {} focus session(s). Time for a {}!",
+                        self.pomodoro.completed_focus,
+                        self.pomodoro.phase.label()
+                    ),
+                ),
+                PomodoroPhase::ShortBreak | PomodoroPhase::LongBreak => (
+                    "Break Finished",
+                    "Ready to start the next Focus session.".to_owned(),
+                ),
+            };
+            self.state.push_notification(
+                NotificationItem {
+                    id: format!("pomodoro-{}", self.pomodoro.completed_focus),
+                    app_name: "Pomodoro".to_owned(),
+                    title: title.to_owned(),
+                    body,
+                    icon_rgba: None,
+                    timestamp: chrono::Utc::now().timestamp().max(0) as u64,
+                },
+                now,
+            );
+        }
+
         // Win32 WS_EX_NOACTIVATE windows can drop pointer-hover events; poll exact drawn pill
         // bounds and top-edge trigger zone so envelope animations stay completely glitch-free.
         let top_y = self.effective_top_offset();
@@ -753,6 +817,7 @@ impl eframe::App for IslandApp {
         let showing_live_seconds = self.state.visual == IslandVisualState::Idle
             && self.effective_idle_mode() == IdleDisplayMode::Clock
             && self.config.clock_show_seconds;
+        let pomodoro_running = self.pomodoro.running;
 
         if animating || morphing || hover_changed || fs_changed {
             ctx.request_repaint();
@@ -765,6 +830,7 @@ impl eframe::App for IslandApp {
             && self.state.active.is_none())
             || playing_lyrics
             || showing_live_seconds
+            || pomodoro_running
         {
             ctx.request_repaint_after(Duration::from_millis(250));
         } else if let Some(deadline) = self
@@ -920,6 +986,8 @@ impl eframe::App for IslandApp {
                 calendar_cmd_tx: &self.channels.calendar_cmd_tx,
                 config_dirty: &mut config_dirty,
                 test_notification_requested: &mut test_notif_req,
+                installed_fonts: &mut self.installed_fonts,
+                font_search: &mut self.font_search,
             },
         );
         if test_notif_req {
@@ -936,6 +1004,16 @@ impl eframe::App for IslandApp {
             if new_lyric_opts != prev_lyric_opts {
                 self.request_lyrics_for_current();
             }
+            if self.config.font_name != self.applied_font_name {
+                self.applied_font_name = self.config.font_name.clone();
+                apply_configured_fonts(&ctx, &self.applied_font_name);
+                self.cjk_fonts_loaded = false;
+            }
+            self.pomodoro.sync_durations(
+                self.config.pomodoro_focus_mins,
+                self.config.pomodoro_short_break_mins,
+                self.config.pomodoro_long_break_mins,
+            );
             self.state.set_auto_hide(self.config.auto_hide_when_idle, now);
             self.state
                 .set_auto_hide_delay(Duration::from_secs(self.config.auto_hide_delay_secs));
@@ -1045,12 +1123,12 @@ impl IslandApp {
                                     muted,
                                 );
                                 if let Some(k) = active {
-                                    let lyric_text = if self.config.karaoke_lyric_mode
-                                        == KaraokeLyricMode::Romaji
-                                    {
-                                        k.romaji.unwrap_or(k.text)
-                                    } else {
-                                        k.text
+                                    let lyric_text = match self.config.karaoke_lyric_mode {
+                                        KaraokeLyricMode::Romaji => k.romaji.unwrap_or(k.text),
+                                        KaraokeLyricMode::Translate => {
+                                            k.translation.unwrap_or(k.text)
+                                        }
+                                        KaraokeLyricMode::Original => k.text,
                                     };
                                     if self.config.karaoke_lyrics {
                                         render_karaoke_line(
@@ -1166,6 +1244,39 @@ impl IslandApp {
                     });
                     return;
                 }
+            }
+            IdleDisplayMode::Pomodoro if self.config.show_pomodoro => {
+                let phase_col = match self.pomodoro.phase {
+                    PomodoroPhase::Focus => accent,
+                    PomodoroPhase::ShortBreak => Color32::from_rgb(80, 210, 145),
+                    PomodoroPhase::LongBreak => Color32::from_rgb(135, 175, 255),
+                };
+                let dot_color = if self.pomodoro.running {
+                    phase_col
+                } else {
+                    Color32::from_gray(145)
+                };
+                let mut job = LayoutJob::default();
+                job.append(
+                    &self.pomodoro.format_mm_ss(),
+                    0.0,
+                    TextFormat {
+                        font_id: FontId::monospace(12.0 * s),
+                        color: text_col,
+                        ..Default::default()
+                    },
+                );
+                job.append(
+                    &format!("  {}", self.pomodoro.phase.short_label()),
+                    0.0,
+                    TextFormat {
+                        font_id: FontId::proportional(9.5 * s),
+                        color: muted,
+                        ..Default::default()
+                    },
+                );
+                render_dot_label(ui, dot_color, 3.0 * s, job);
+                return;
             }
             _ => {}
         }
@@ -1400,6 +1511,9 @@ impl IslandApp {
                     if self.config.show_calendar {
                         render_pill_tab(ui, &mut self.active_tab, IslandTab::Calendar, "Calendar", accent, s);
                     }
+                    if self.config.show_pomodoro {
+                        render_pill_tab(ui, &mut self.active_tab, IslandTab::Pomodoro, "⏱ Timer", accent, s);
+                    }
                 },
             );
             ui.add_space(6.0 * s);
@@ -1435,6 +1549,7 @@ impl IslandApp {
             IslandTab::Music => self.render_music_tab(ui, ctx, now),
             IslandTab::Todo => self.render_todo_tab(ui),
             IslandTab::Calendar => self.render_calendar_tab(ui),
+            IslandTab::Pomodoro => self.render_pomodoro_tab(ui, now),
         }
     }
 
@@ -1480,12 +1595,10 @@ impl IslandApp {
             let clicked = if let Some(track) = &self.media {
                 let pos_ms = self.current_lyric_ms(now);
                 let lyric = active_karaoke(&self.lyrics, pos_ms)
-                    .map(|k| {
-                        if self.config.karaoke_lyric_mode == KaraokeLyricMode::Romaji {
-                            k.romaji.unwrap_or(k.text)
-                        } else {
-                            k.text
-                        }
+                    .map(|k| match self.config.karaoke_lyric_mode {
+                        KaraokeLyricMode::Romaji => k.romaji.unwrap_or(k.text),
+                        KaraokeLyricMode::Translate => k.translation.unwrap_or(k.text),
+                        KaraokeLyricMode::Original => k.text,
                     })
                     .unwrap_or("No synced lyric");
                 render_overview_summary_row(
@@ -1538,6 +1651,139 @@ impl IslandApp {
                 self.active_tab = IslandTab::Todo;
             }
         }
+
+        if self.config.show_pomodoro {
+            let status = if self.pomodoro.running { "Running" } else { "Paused" };
+            let pom_text = format!(
+                "{} • {} ({status})",
+                self.pomodoro.phase.label(),
+                self.pomodoro.format_mm_ss()
+            );
+            if render_overview_summary_row(ui, "⏱", accent, &pom_text, text_col, s, true) {
+                self.active_tab = IslandTab::Pomodoro;
+            }
+        }
+    }
+
+    fn render_pomodoro_tab(&mut self, ui: &mut egui::Ui, now: Instant) {
+        let accent = self.effective_accent();
+        let text_col = self.text_color32();
+        let muted = self.muted_color32();
+        let s = self.config.scale;
+        let phase_col = match self.pomodoro.phase {
+            PomodoroPhase::Focus => accent,
+            PomodoroPhase::ShortBreak => Color32::from_rgb(80, 210, 145),
+            PomodoroPhase::LongBreak => Color32::from_rgb(135, 175, 255),
+        };
+
+        ui.vertical_centered(|ui| {
+            ui.add_space(4.0 * s);
+            egui::Frame::new()
+                .fill(Color32::from_rgba_unmultiplied(
+                    phase_col.r(),
+                    phase_col.g(),
+                    phase_col.b(),
+                    34,
+                ))
+                .corner_radius(CornerRadius::same(10))
+                .inner_margin(egui::Margin::symmetric(10, 3))
+                .show(ui, |ui| {
+                    ui.label(
+                        RichText::new(self.pomodoro.phase.label())
+                            .font(FontId::proportional(11.0 * s))
+                            .color(phase_col)
+                            .strong(),
+                    );
+                });
+
+            ui.add_space(6.0 * s);
+            ui.label(
+                RichText::new(self.pomodoro.format_mm_ss())
+                    .font(FontId::monospace(30.0 * s))
+                    .color(text_col)
+                    .strong(),
+            );
+            ui.add_space(6.0 * s);
+
+            let bar_w = (ui.available_width() - 40.0 * s).max(120.0);
+            let (bar_rect, _) = ui.allocate_exact_size(Vec2::new(bar_w, 5.0 * s), Sense::hover());
+            ui.painter().rect_filled(
+                bar_rect,
+                CornerRadius::same(3),
+                Color32::from_rgba_unmultiplied(255, 255, 255, 26),
+            );
+            let fill_w = (bar_rect.width() * self.pomodoro.progress()).max(0.0);
+            if fill_w > 0.5 {
+                let fill_rect = Rect::from_min_size(bar_rect.min, Vec2::new(fill_w, bar_rect.height()));
+                ui.painter()
+                    .rect_filled(fill_rect, CornerRadius::same(3), phase_col);
+            }
+
+            ui.add_space(10.0 * s);
+            ui.horizontal(|ui| {
+                let total_btn_w = (88.0 + 66.0 + 60.0) * s + 12.0 * s;
+                let pad = ((ui.available_width() - total_btn_w) * 0.5).max(0.0);
+                ui.add_space(pad);
+                let toggle_label = if self.pomodoro.running { "Pause" } else { "Start" };
+                if ui
+                    .add(
+                        egui::Button::new(
+                            RichText::new(toggle_label)
+                                .font(FontId::proportional(12.0 * s))
+                                .color(Color32::WHITE)
+                                .strong(),
+                        )
+                        .min_size(Vec2::new(88.0 * s, 26.0 * s))
+                        .fill(phase_col)
+                        .corner_radius(CornerRadius::same(13)),
+                    )
+                    .clicked()
+                {
+                    self.pomodoro.toggle(now);
+                }
+                if ui
+                    .add(
+                        egui::Button::new(
+                            RichText::new("Reset")
+                                .font(FontId::proportional(11.5 * s))
+                                .color(text_col),
+                        )
+                        .min_size(Vec2::new(66.0 * s, 26.0 * s))
+                        .fill(Color32::from_rgba_unmultiplied(255, 255, 255, 18))
+                        .corner_radius(CornerRadius::same(13)),
+                    )
+                    .clicked()
+                {
+                    self.pomodoro.reset();
+                }
+                if ui
+                    .add(
+                        egui::Button::new(
+                            RichText::new("Skip")
+                                .font(FontId::proportional(11.5 * s))
+                                .color(muted),
+                        )
+                        .min_size(Vec2::new(60.0 * s, 26.0 * s))
+                        .fill(Color32::from_rgba_unmultiplied(255, 255, 255, 12))
+                        .corner_radius(CornerRadius::same(13)),
+                    )
+                    .clicked()
+                {
+                    self.pomodoro.skip();
+                }
+            });
+
+            ui.add_space(8.0 * s);
+            let cycle_done = self.pomodoro.completed_focus % 4;
+            ui.label(
+                RichText::new(format!(
+                    "Sessions: {}  ({}/4 in cycle)",
+                    self.pomodoro.completed_focus, cycle_done
+                ))
+                .font(FontId::proportional(10.5 * s))
+                .color(muted),
+            );
+        });
     }
 
     fn render_music_tab(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, now: Instant) {
@@ -1776,8 +2022,13 @@ impl IslandApp {
                                     let romaji_primary = self.config.karaoke_lyric_mode
                                         == KaraokeLyricMode::Romaji
                                         && k.romaji.is_some();
+                                    let translate_primary = self.config.karaoke_lyric_mode
+                                        == KaraokeLyricMode::Translate
+                                        && k.translation.is_some();
                                     let primary_text = if romaji_primary {
                                         k.romaji.unwrap_or(k.text)
+                                    } else if translate_primary {
+                                        k.translation.unwrap_or(k.text)
                                     } else {
                                         k.text
                                     };
@@ -1792,7 +2043,7 @@ impl IslandApp {
                                         wrap_w,
                                     );
 
-                                    if romaji_primary {
+                                    if romaji_primary || translate_primary {
                                         ui.add_space(2.0 * s);
                                         render_wrapped_karaoke(
                                             ui,
@@ -1818,7 +2069,8 @@ impl IslandApp {
                                         );
                                     }
 
-                                    if self.config.translate_lyrics
+                                    if !translate_primary
+                                        && self.config.translate_lyrics
                                         && let Some(tr) = k.translation
                                     {
                                         ui.add_space(2.0 * s);
@@ -1841,6 +2093,11 @@ impl IslandApp {
                                             && let Some(next_rom) = k.next_romaji
                                         {
                                             (next_rom, Some(next_line))
+                                        } else if self.config.karaoke_lyric_mode
+                                            == KaraokeLyricMode::Translate
+                                            && let Some(next_tr) = k.next_translation
+                                        {
+                                            (next_tr, Some(next_line))
                                         } else {
                                             (
                                                 next_line,
@@ -2184,11 +2441,12 @@ fn paint_island_surface(painter: &egui::Painter, rect: Rect, style: SurfaceStyle
         fill
     };
     let r = ear_w.min(rect.height() * 0.45);
-    const SEGS: usize = 10;
+    const SEGS: usize = 14;
+    let seam_overlap = 0.75;
 
-    // Top-left concave ear
+    // Top-left concave ear (0.75px seam overlap eliminates subpixel AA gap against body_rect)
     let mut left_mesh = Mesh::default();
-    let left_apex = Pos2::new(body_rect.left(), top_y);
+    let left_apex = Pos2::new(body_rect.left() + seam_overlap, top_y);
     let left_center = Pos2::new(body_rect.left() - r, top_y + r);
     left_mesh.colored_vertex(left_apex, ear_color);
     for i in 0..=SEGS {
@@ -2203,11 +2461,16 @@ fn paint_island_surface(painter: &egui::Painter, rect: Rect, style: SurfaceStyle
             left_mesh.add_triangle(0, i as u32, (i + 1) as u32);
         }
     }
+    left_mesh.colored_vertex(
+        Pos2::new(body_rect.left() + seam_overlap, top_y + r),
+        ear_color,
+    );
+    left_mesh.add_triangle(0, (SEGS + 1) as u32, (SEGS + 2) as u32);
     painter.add(Shape::mesh(left_mesh));
 
     // Top-right concave ear
     let mut right_mesh = Mesh::default();
-    let right_apex = Pos2::new(body_rect.right(), top_y);
+    let right_apex = Pos2::new(body_rect.right() - seam_overlap, top_y);
     let right_center = Pos2::new(body_rect.right() + r, top_y + r);
     right_mesh.colored_vertex(right_apex, ear_color);
     for i in 0..=SEGS {
@@ -2222,6 +2485,11 @@ fn paint_island_surface(painter: &egui::Painter, rect: Rect, style: SurfaceStyle
             right_mesh.add_triangle(0, i as u32, (i + 1) as u32);
         }
     }
+    right_mesh.colored_vertex(
+        Pos2::new(body_rect.right() - seam_overlap, top_y + r),
+        ear_color,
+    );
+    right_mesh.add_triangle(0, (SEGS + 1) as u32, (SEGS + 2) as u32);
     painter.add(Shape::mesh(right_mesh));
 }
 

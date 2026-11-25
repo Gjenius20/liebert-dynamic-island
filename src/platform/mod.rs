@@ -322,6 +322,66 @@ pub fn is_cursor_in_top_trigger(
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstalledFont {
+    pub name: String,
+    pub path: String,
+}
+
+pub fn collect_fonts_from_dirs(dirs: &[std::path::PathBuf]) -> Vec<InstalledFont> {
+    let mut seen = std::collections::HashSet::new();
+    let mut fonts = Vec::new();
+    for dir in dirs {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                let sub = collect_fonts_from_dirs(&[path]);
+                for f in sub {
+                    if seen.insert(f.name.to_ascii_lowercase()) {
+                        fonts.push(f);
+                    }
+                }
+                continue;
+            }
+            let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+                continue;
+            };
+            if !matches!(ext.to_ascii_lowercase().as_str(), "ttf" | "otf" | "ttc") {
+                continue;
+            }
+            let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            let display = stem.replace(['_', '-'], " ").trim().to_owned();
+            if display.is_empty() {
+                continue;
+            }
+            if seen.insert(display.to_ascii_lowercase()) {
+                fonts.push(InstalledFont {
+                    name: display,
+                    path: path.to_string_lossy().into_owned(),
+                });
+            }
+        }
+    }
+    fonts.sort_by_key(|a| a.name.to_ascii_lowercase());
+    fonts
+}
+
+pub fn list_installed_fonts() -> Vec<InstalledFont> {
+    #[cfg(windows)]
+    return windows::list_installed_fonts();
+
+    #[cfg(target_os = "linux")]
+    return linux::list_installed_fonts();
+
+    #[cfg(not(any(windows, target_os = "linux")))]
+    Vec::new()
+}
+
 #[allow(dead_code)] // Polled asynchronously by Windows fullscreen watcher; retained for Linux compatibility.
 pub fn is_foreground_fullscreen() -> bool {
     #[cfg(windows)]
