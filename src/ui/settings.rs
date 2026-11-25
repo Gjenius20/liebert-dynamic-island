@@ -61,7 +61,7 @@ pub fn render_settings_viewport(ctx: &egui::Context, st: SettingsWindowState<'_>
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);
             }
 
-            apply_settings_theme(ui);
+            apply_settings_theme(ui, st.config.accent_color);
             let panel_frame = egui::Frame::new()
                 .fill(Color32::from_rgb(19, 19, 23))
                 .inner_margin(egui::Margin::same(14));
@@ -124,13 +124,14 @@ fn render_appearance_tab(
             (false, "Floating Dynamic Island"),
         ] {
             let selected = config.notch_dock_mode == is_notch;
+            let [ar, ag, ab] = config.accent_color;
             let fill = if selected {
-                Color32::from_rgba_unmultiplied(224, 92, 98, 70)
+                Color32::from_rgba_unmultiplied(ar, ag, ab, 65)
             } else {
                 Color32::from_rgb(32, 32, 38)
             };
             let stroke = if selected {
-                Stroke::new(1.5, Color32::from_rgb(224, 92, 98))
+                Stroke::new(1.5, Color32::from_rgb(ar, ag, ab))
             } else {
                 Stroke::new(1.0, Color32::from_rgb(65, 65, 76))
             };
@@ -205,14 +206,11 @@ fn render_appearance_tab(
     ui.label(RichText::new("Colors").strong());
     ui.horizontal(|ui| {
         ui.label("Background:");
-        let mut bg = Color32::from_rgba_unmultiplied(
-            config.bg_color[0],
-            config.bg_color[1],
-            config.bg_color[2],
-            config.bg_color[3],
-        );
-        if ui.color_edit_button_srgba(&mut bg).changed() {
-            config.bg_color = bg.to_srgba_unmultiplied();
+        let mut bg_rgb = [config.bg_color[0], config.bg_color[1], config.bg_color[2]];
+        if ui.color_edit_button_srgb(&mut bg_rgb).changed() {
+            config.bg_color[0] = bg_rgb[0];
+            config.bg_color[1] = bg_rgb[1];
+            config.bg_color[2] = bg_rgb[2];
             changed = true;
         }
         ui.label("Accent:");
@@ -225,8 +223,18 @@ fn render_appearance_tab(
         }
     });
     changed |= ui
+        .add(egui::Slider::new(&mut config.bg_color[3], 60..=255).text("Background Opacity"))
+        .changed();
+    changed |= ui
         .add(egui::Slider::new(&mut config.border_alpha, 0..=160).text("Border Opacity"))
         .changed();
+    if config.show_lyrics && config.dynamic_album_color {
+        ui.label(
+            RichText::new("Note: Album art dynamic accent is active while music plays.")
+                .small()
+                .color(Color32::GRAY),
+        );
+    }
 
     ui.add_space(8.0);
     ui.label(RichText::new("Font (Installed on Device)").strong());
@@ -564,7 +572,7 @@ fn render_todo_tab(ui: &mut egui::Ui, todos: &mut TodoStore, new_todo_input: &mu
     }
 }
 
-fn apply_settings_theme(ui: &mut egui::Ui) {
+fn apply_settings_theme(ui: &mut egui::Ui, accent: [u8; 3]) {
     let style = ui.style_mut();
     style.visuals = egui::Visuals::dark();
     style.visuals.panel_fill = Color32::from_rgb(19, 19, 23);
@@ -576,8 +584,9 @@ fn apply_settings_theme(ui: &mut egui::Ui) {
     style.visuals.widgets.hovered.weak_bg_fill = Color32::from_rgb(46, 46, 56);
     style.visuals.widgets.hovered.corner_radius = CornerRadius::same(7);
     style.visuals.widgets.active.corner_radius = CornerRadius::same(7);
-    style.visuals.selection.bg_fill = Color32::from_rgba_unmultiplied(224, 92, 98, 175);
-    style.visuals.selection.stroke = Stroke::new(1.0, Color32::from_rgb(224, 92, 98));
+    style.visuals.selection.bg_fill =
+        Color32::from_rgba_unmultiplied(accent[0], accent[1], accent[2], 175);
+    style.visuals.selection.stroke = Stroke::new(1.0, Color32::from_rgb(accent[0], accent[1], accent[2]));
     style.spacing.item_spacing = egui::vec2(8.0, 6.0);
 }
 

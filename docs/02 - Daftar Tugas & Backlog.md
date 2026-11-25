@@ -32,7 +32,7 @@ Referensi cakupan fitur: [[PRD-LiebertDynamicIsland-MVP]].
 - [x] Tambahkan unit test state machine, config, clock, lyrics, todo, calendar, pomodoro, album accent, fullscreen rect, & text truncation (`cargo test` — 30 tests passed)
 - [ ] Uji manual edge cases: multi-notifikasi berurutan, teks panjang/Unicode, multi-DPI scaling, hover expand live, top-edge hover reveal saat auto-hide, Spotify lyrics, & Google Calendar `.ics`
 - [ ] Verifikasi target performa `--release`: RAM idle `< 25 MB`, CPU idle `< 0.5%`, latency `< 150 ms`
-- [ ] Perbarui `README.md` (cara build, izin Windows, catatan daemon Linux) & lakukan smoke test binary Windows + Linux
+- [x] Perbarui `README.md` (cara build, izin Windows, catatan daemon Linux) & lakukan smoke test binary Windows + Linux *(README.md diperbarui sesuai kode aktual; smoke test Linux masih pending)*
 
 ## Fitur Tambahan & Ekspansi (Di Luar Scope Awal P0)
 - [x] **Music & Synced Lyrics:** Pembaca media SMTC (Windows) & MPRIS2 (Linux) + LRC lyrics via LRCLIB (`src/lyrics.rs`)
