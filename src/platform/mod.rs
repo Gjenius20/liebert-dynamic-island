@@ -206,18 +206,23 @@ pub fn apply_no_activate_hook(window_title: &str) {
     let _ = window_title;
 }
 
-pub fn position_overlay_window(
-    window_title: &str,
-    x_logical: f32,
-    y_logical: f32,
-    w_logical: f32,
-    h_logical: f32,
-) {
-    #[cfg(target_os = "linux")]
-    linux::position_overlay_window(window_title, x_logical, y_logical, w_logical, h_logical);
+pub fn pin_window_top_y(window_title: &str, target_y_px: i32) {
+    #[cfg(windows)]
+    windows::pin_window_top_y(window_title, target_y_px);
 
-    #[cfg(not(target_os = "linux"))]
-    let _ = (window_title, x_logical, y_logical, w_logical, h_logical);
+    #[cfg(not(windows))]
+    let _ = (window_title, target_y_px);
+}
+
+pub fn bring_window_to_front(window_title: &str) -> bool {
+    #[cfg(windows)]
+    return windows::bring_window_to_front(window_title);
+
+    #[cfg(not(windows))]
+    {
+        let _ = window_title;
+        true
+    }
 }
 
 pub fn is_cursor_over_window(window_title: &str, padding_px: i32) -> Option<bool> {

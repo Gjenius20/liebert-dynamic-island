@@ -56,9 +56,9 @@ pub struct NotificationItem {
 ```
 
 ### State Machine Overlay
-- **`Idle`:** Pill compact di top-center (atau tersembunyi jika `auto_hide = true`).
-- **`Compact`:** Pill melebar menampilkan ikon app, judul, dan preview singkat; timer auto-collapse default 5 detik.
-- **`Expanded`:** Aktif saat hover pada `Compact` (menjeda timer), menampilkan body lengkap & tombol `Dismiss`.
+- **`Idle`:** Pill compact di top-center atau menyatu seamless dengan tepi atas monitor (`y = 0`) lewat transisi `notch_morph` (`Top Notch` ↔ `Floating Island`), menampilkan mini cover + lirik karaoke (`Original` atau `Romaji` sesuai `karaoke_lyric_mode`, disinkronkan via `duration` LRCLIB, `end_ms` jeda instrumental, & `lyric_offset_ms`) + 3-bar equalizer saat musik diputar, jam zona waktu, atau jadwal terdekat; otomatis tersembunyi saat `auto_hide` atau `hide_in_fullscreen` aktif.
+- **`Compact`:** Pill melebar menampilkan avatar berwarna brand aplikasi (`WhatsApp`, `Discord`, `Gmail`, browser, dll.), badge nama aplikasi terpisah tanpa overlap, judul, preview singkat, serta indikator jumlah antrean; timer auto-collapse default 5 detik.
+- **`Expanded`:** Aktif saat hover pada `Compact` (menjeda timer), menampilkan slot kiri/kanan terklip bersih (tab `Home`, `♪ Music`, `☑ N`, `Cal` + tombol cepat ganti mode `Island`/`Notch` + tombol `⚙` yang membawa jendela Settings ke depan layar via `bring_window_to_front`), dan `ScrollArea` pada kolom lirik kanan. Juga menghormati opsi `show_notifications`.
 
 ## Alur Komponen Utama
 1. **Startup:** `config.rs` membaca `config.toml` → `tray.rs` membuat ikon tray → `platform` memunculkan listener notifikasi di background thread/async task → `ui` membuka overlay window dalam state `Idle`.

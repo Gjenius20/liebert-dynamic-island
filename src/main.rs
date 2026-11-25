@@ -37,7 +37,7 @@ fn main() -> ExitCode {
 
     let demo_mode = args.iter().any(|a| a == "--demo");
     let config = Config::load();
-    let tray = match TrayController::new(config.auto_hide_when_idle) {
+    let tray = match TrayController::new(config.auto_hide_when_idle, config.notch_dock_mode) {
         Ok(t) => Some(t),
         Err(err) => {
             eprintln!("Warning: tray unavailable ({err})");
@@ -50,9 +50,19 @@ fn main() -> ExitCode {
     let (media_cmd_tx, media_cmd_rx) = mpsc::channel();
     let (calendar_cmd_tx, calendar_cmd_rx) = mpsc::channel();
 
-    let initial_w = config.idle_width * config.scale;
+    let ear_w = if config.notch_dock_mode {
+        (12.0 * config.scale).round() * 2.0
+    } else {
+        0.0
+    };
+    let initial_w = config.idle_width * config.scale + ear_w;
     let initial_h = 30.0 * config.scale;
     let initial_x = ((platform::primary_monitor_logical_width() - initial_w) * 0.5).max(0.0);
+    let initial_y = if config.notch_dock_mode {
+        0.0
+    } else {
+        config.top_offset_px
+    };
 
     platform::prepare_overlay_rules(WINDOW_TITLE, config.top_offset_px);
 
@@ -65,9 +75,12 @@ fn main() -> ExitCode {
             .with_always_on_top()
             .with_taskbar(false)
             .with_active(false)
-            .with_resizable(cfg!(target_os = "linux"))
+            .with_resizable(false)
+            .with_minimize_button(false)
+            .with_maximize_button(false)
+            .with_close_button(false)
             .with_inner_size([initial_w, initial_h])
-            .with_position([initial_x, config.top_offset_px]),
+            .with_position([initial_x, initial_y]),
         ..Default::default()
     };
 

@@ -26,6 +26,7 @@ pub enum ListenerStatus {
     // Only produced by the WinRT listener; Linux D-Bus failures map to `Error`.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     AccessDenied(String),
+    #[allow(dead_code)] // Constructed by the Linux D-Bus listener and fallback targets.
     Error(String),
 }
 
