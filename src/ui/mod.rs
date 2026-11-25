@@ -178,7 +178,8 @@ pub struct IslandApp {
     notch_morph: f32,
     test_notif_seq: u32,
     last_frame: Instant,
-    last_fullscreen_raw: bool,
+    last_fullscreen_exclusive: bool,
+    last_fullscreen_windowed: bool,
     no_activate_applied: bool,
     last_visible: bool,
     last_egui_hovered: bool,
@@ -252,7 +253,8 @@ impl IslandApp {
             notch_morph,
             test_notif_seq: 0,
             last_frame: now,
-            last_fullscreen_raw: false,
+            last_fullscreen_exclusive: false,
+            last_fullscreen_windowed: false,
             no_activate_applied: false,
             last_visible: true,
             last_egui_hovered: false,
@@ -462,8 +464,9 @@ impl IslandApp {
                     self.state.listener_status = status;
                     status_changed = true;
                 }
-                PlatformEvent::Fullscreen(fs) => {
-                    self.last_fullscreen_raw = fs;
+                PlatformEvent::Fullscreen(exclusive, windowed) => {
+                    self.last_fullscreen_exclusive = exclusive;
+                    self.last_fullscreen_windowed = windowed;
                 }
                 PlatformEvent::Media(track) => {
                     self.media = track;
@@ -694,7 +697,12 @@ impl IslandApp {
         self.state
             .set_hide_in_fullscreen(self.config.hide_in_fullscreen);
         self.state
-            .set_fullscreen_active(self.config.hide_in_fullscreen && self.last_fullscreen_raw);
+            .set_fullscreen_active(
+                self.config.hide_in_fullscreen
+                    && (self.last_fullscreen_exclusive
+                        || (self.config.hide_in_windowed_fullscreen
+                            && self.last_fullscreen_windowed)),
+            );
         self.state
             .set_collapse_timeout(Duration::from_secs(self.config.collapse_timeout_secs));
         if let Some(tray) = &self.tray {
@@ -776,7 +784,9 @@ impl IslandApp {
             self.notch_morph = target_morph;
         }
 
-        let fs = self.config.hide_in_fullscreen && self.last_fullscreen_raw;
+        let fs = self.config.hide_in_fullscreen
+            && (self.last_fullscreen_exclusive
+                || (self.config.hide_in_windowed_fullscreen && self.last_fullscreen_windowed));
         let fs_changed = self.state.set_fullscreen_active(fs);
 
         if let Some(finished_phase) = self.pomodoro.tick(now) {
@@ -1183,8 +1193,12 @@ impl IslandApp {
                 .set_auto_hide_delay(Duration::from_secs(self.config.auto_hide_delay_secs));
             self.state
                 .set_hide_in_fullscreen(self.config.hide_in_fullscreen);
-            self.state
-                .set_fullscreen_active(self.config.hide_in_fullscreen && self.last_fullscreen_raw);
+            self.state.set_fullscreen_active(
+                self.config.hide_in_fullscreen
+                    && (self.last_fullscreen_exclusive
+                        || (self.config.hide_in_windowed_fullscreen
+                            && self.last_fullscreen_windowed)),
+            );
             self.state
                 .set_collapse_timeout(Duration::from_secs(self.config.collapse_timeout_secs));
             if let Some(tray) = &self.tray {

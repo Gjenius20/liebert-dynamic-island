@@ -120,7 +120,7 @@ pub enum PlatformEvent {
     Removed(String),
     Status(ListenerStatus),
     Media(Option<MediaTrack>),
-    Fullscreen(bool),
+    Fullscreen(bool, bool),
     LyricsLoaded {
         artist: String,
         title: String,

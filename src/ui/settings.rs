@@ -541,6 +541,16 @@ fn render_appearance_tab(
             "Hide when a fullscreen app/game is active",
         )
         .changed();
+    if config.hide_in_fullscreen {
+        ui.indent("fullscreen_sub_opts", |ui| {
+            changed |= ui
+                .checkbox(
+                    &mut config.hide_in_windowed_fullscreen,
+                    "Also hide on windowed fullscreen / maximized apps",
+                )
+                .changed();
+        });
+    }
     ui.horizontal(|ui| {
         changed |= ui
             .checkbox(&mut config.show_notifications, "Show notification popups")
