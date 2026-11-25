@@ -31,6 +31,7 @@ tags:
 - `src/ui/settings.rs`, `src/ui/mod.rs`: Memperbaiki perataan UI dan alur pengetesan: menyamakan lebar penuh tombol `Display Mode` di Settings, memperpendek label checkbox notifikasi agar tombol `"Send Test Notification"` tidak terpotong di lebar jendela `450 px`, serta auto-unpause di `push_test_notification` agar tes popup selalu tampil.
 
 ### Changed
+- `README.md`: Menambahkan bagian preview gambar **UI** dan **Settings** di bagian atas README.
 - `README.md`: Memperbarui tabel konfigurasi (`hide_in_windowed_fullscreen`), struktur modul (`src/ui/icons.rs`), profil release (`codegen-units = 1`), dan instruksi packaging installer Windows via `cargo-packager`.
 - `Cargo.toml`, `src/platform/mod.rs`, `src/platform/windows.rs`, `src/platform/linux.rs`, `src/ui/mod.rs`: Mengoptimalkan alokasi heap & hot-path rendering dengan berbagi buffer `AlbumArt` via `Arc<AlbumArt>` (zero-copy 102 KB antar thread & frame), menghapus `self.media.clone()` / `self.state.active.clone()` / `ui.painter().clone()` per-frame di `render_idle`, `render_expanded`, `render_music_tab`, dan `render_centered_truncated_text`, serta menambahkan `codegen-units = 1` pada `[profile.release]`.
 - `README.md`: Memperbarui dokumentasi utama proyek agar mencerminkan arsitektur, dependensi, fitur (Notch/Floating Island, Karaoke/Romaji/Translate, Pomodoro, Font Picker, Todo, Google Calendar), konfigurasi `config.toml`, CLI flags, dan perintah test/lint aktual.

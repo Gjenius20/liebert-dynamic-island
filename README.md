@@ -2,6 +2,26 @@
 
 Lightweight native Rust Dynamic Island overlay for **Windows 10/11** and **Linux (X11/Wayland)** that surfaces system notifications, media controls, synced karaoke lyrics, a Pomodoro timer, a local todo list, and Google Calendar alerts at the top-center of your screen without stealing window focus.
 
+## UI
+
+|                                                                                                                               |                                                                                                                              |
+| :---------------------------------------------------------------------------------------------------------------------------: | :--------------------------------------------------------------------------------------------------------------------------: |
+| <img height="130" alt="UI Preview 1" src="https://github.com/user-attachments/assets/beecbc2a-f66c-43bf-b421-154a759ec6c9" /> | <img height="90" alt="UI Preview 2" src="https://github.com/user-attachments/assets/23af6133-3afa-4038-8a3f-e82aa42d356b" /> |
+
+> Modern UI That You Can Choose.
+
+---
+
+## Settings
+
+<p align="center">
+  <img width="340" alt="Settings Preview" src="https://github.com/user-attachments/assets/43106fe9-4c85-42a5-a46e-5f4cc7f00baa" />
+</p>
+
+> Fully Customize Settings.
+
+---
+
 ## Key Features
 
 - **Non-Intrusive Notification Overlay:** Smooth `Idle` ↔ `Compact` ↔ `Expanded` pill transitions with branded app accents (WhatsApp, Discord, Gmail, Chrome, Telegram, Slack, etc.), notification queueing, hover-to-expand, and configurable auto-collapse.
@@ -35,27 +55,28 @@ The release binary is output to `target/release/liebert-dynamic-island` (or `.ex
 ## Configuration
 
 Settings are stored locally in `config.toml` (and tasks in `todos.toml`) under your OS config directory:
+
 - **Windows:** `%APPDATA%\liebert-dynamic-island\config.toml`
 - **Linux:** `~/.config/liebert-dynamic-island/config.toml`
 
 Missing or invalid fields safely fall back to `Default`. Key options:
 
-| Key | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `notch_dock_mode` | `bool` | `true` | `true` for seamless Top Notch, `false` for Floating Dynamic Island |
-| `scale` | `f32` | `1.0` | UI scale factor (`0.75`–`1.5`) |
-| `idle_width` / `expanded_width` | `f32` | `140.0` / `390.0` | Pill width in idle (`110`–`240`) and expanded (`320`–`520`) states |
-| `top_offset_px` | `f32` | `10.0` | Top margin in Floating Island mode (`0`–`60`) |
-| `auto_hide_when_idle` | `bool` | `false` | Automatically hide the overlay after `auto_hide_delay_secs` |
-| `auto_hide_delay_secs` | `u64` | `5` | Idle delay before auto-hiding (`0`–`60` seconds) |
-| `hide_in_fullscreen` | `bool` | `true` | Hide idle pill when a fullscreen app or game is active |
-| `hide_in_windowed_fullscreen` | `bool` | `true` | Also hide on windowed fullscreen / maximized apps |
-| `idle_display` | `enum` | `Auto` | `Auto`, `Clock`, `Lyrics`, `NextEvent`, `Pomodoro`, or `Minimal` |
-| `clock_timezone` | `string` | `"Local"` | `"Local"` or any IANA timezone (e.g. `"Asia/Jakarta"`) |
-| `font_name` | `string` | `""` | Installed device font name (empty uses system default) |
-| `karaoke_lyric_mode` | `enum` | `Original` | Primary karaoke text: `Original`, `Romaji`, or `Translate` |
-| `lyric_offset_ms` | `i64` | `0` | Lyric sync offset in milliseconds (`-5000`–`5000`) |
-| `google_calendar_ics_url` | `string` | `""` | Secret iCal `.ics` URL for Google Calendar sync |
+| Key                             | Type     | Default           | Description                                                        |
+| :------------------------------ | :------- | :---------------- | :----------------------------------------------------------------- |
+| `notch_dock_mode`               | `bool`   | `true`            | `true` for seamless Top Notch, `false` for Floating Dynamic Island |
+| `scale`                         | `f32`    | `1.0`             | UI scale factor (`0.75`–`1.5`)                                     |
+| `idle_width` / `expanded_width` | `f32`    | `140.0` / `390.0` | Pill width in idle (`110`–`240`) and expanded (`320`–`520`) states |
+| `top_offset_px`                 | `f32`    | `10.0`            | Top margin in Floating Island mode (`0`–`60`)                      |
+| `auto_hide_when_idle`           | `bool`   | `false`           | Automatically hide the overlay after `auto_hide_delay_secs`        |
+| `auto_hide_delay_secs`          | `u64`    | `5`               | Idle delay before auto-hiding (`0`–`60` seconds)                   |
+| `hide_in_fullscreen`            | `bool`   | `true`            | Hide idle pill when a fullscreen app or game is active             |
+| `hide_in_windowed_fullscreen`   | `bool`   | `true`            | Also hide on windowed fullscreen / maximized apps                  |
+| `idle_display`                  | `enum`   | `Auto`            | `Auto`, `Clock`, `Lyrics`, `NextEvent`, `Pomodoro`, or `Minimal`   |
+| `clock_timezone`                | `string` | `"Local"`         | `"Local"` or any IANA timezone (e.g. `"Asia/Jakarta"`)             |
+| `font_name`                     | `string` | `""`              | Installed device font name (empty uses system default)             |
+| `karaoke_lyric_mode`            | `enum`   | `Original`        | Primary karaoke text: `Original`, `Romaji`, or `Translate`         |
+| `lyric_offset_ms`               | `i64`    | `0`               | Lyric sync offset in milliseconds (`-5000`–`5000`)                 |
+| `google_calendar_ics_url`       | `string` | `""`              | Secret iCal `.ics` URL for Google Calendar sync                    |
 
 ## Usage
 
