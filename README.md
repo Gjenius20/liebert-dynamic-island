@@ -24,7 +24,7 @@
 - **Top Notch & Floating Island Modes:** Switch in Settings between a seamless bezel-docked **Top Notch** (with concave ears) and a **Floating Dynamic Island**, with automatic hiding during fullscreen / windowed-fullscreen apps (while still surfacing incoming notifications) and configurable delayed auto-hide.
 - **Media Controls & Karaoke Lyrics:** Read playback state and control Shuffle, Previous, Play/Pause, Next, Repeat, and seek position via Windows SMTC or Linux MPRIS2. Fetches synced `.lrc` lyrics from LRCLIB with progressive karaoke highlight in **Original**, offline **Romaji** (`kakasi` + `any_ascii`), or **Translate** mode, plus dynamic accent glow extracted from album art.
 - **Built-In Productivity:** Includes a **Pomodoro Timer** (`Focus` / `Short Break` / `Long Break` with 4-session cycles and idle countdown), local **Todo List** (`todos.toml`), **Google Calendar** `.ics` sync with 5-minute upcoming alerts, and an IANA timezone **Clock**.
-- **Device Font Picker & Live Settings:** Secondary Settings viewport for theme presets (`Crimson`, `Obsidian`, `Midnight`, `AMOLED`, `Slate`), custom RGB/opacity, scale, dimensions, installed device font selection, and system tray controls.
+- **Device Font Picker, Text Alignment & Live Settings:** Secondary Settings viewport for theme presets (`Crimson`, `Obsidian`, `Midnight`, `AMOLED`, `Slate`), custom RGB/opacity, scale, dimensions, installed device font selection, **Left/Center/Right text alignment**, and system tray controls.
 
 ## Tech Stack / Architecture
 
@@ -40,10 +40,26 @@
   - **Windows 10/11:** Works directly from an unpackaged `.exe` (`UserNotificationListener` permission prompt may appear on first run if notification access is disabled in Windows Privacy settings).
   - **Linux:** `org.freedesktop.Notifications` allows only one active notification daemon per desktop session; stop any existing notification daemon (e.g. `dunst`, `mako`) before testing notifications.
 
+### Prebuilt releases
+
+Every `v*` GitHub Release contains:
+
+| Asset | Install |
+| :--- | :--- |
+| `Liebert_Dynamic_Island-0.1.0-x86_64.AppImage` | `chmod +x` then run it (needs FUSE, or use `--appimage-extract`). |
+| `liebert-dynamic-island-linux-x86_64.tar.gz` | `tar -xzf`, then run `./liebert-dynamic-island-linux-x86_64/liebert-dynamic-island`. Includes `LICENSE.md`, `README.md`, `.desktop` and icon. |
+| `liebert-dynamic-island-windows-x86_64-setup.exe` | NSIS installer (per-user install, Start Menu shortcuts + uninstaller). |
+| `liebert-dynamic-island-windows-x86_64.zip` | Portable `.exe` + license + README. |
+| `liebert-dynamic-island-aur-0.1.0.tar.gz` | AUR `PKGBUILD` + `.SRCINFO` for Arch Linux. |
+
+Arch Linux users can build from `packaging/aur/` with `makepkg -si` once the package is submitted to the AUR (`yay -S liebert-dynamic-island`). AUR submission itself needs a maintainer account and is **not** automated by CI.
+
+### Build from source
+
 ```sh
 git clone https://github.com/Zahwan316/liebert-dynamic-island.git
 cd liebert-dynamic-island
-cargo build --release
+cargo build --release --locked
 ```
 
 The release binary is output to `target/release/liebert-dynamic-island` (or `.exe` on Windows).
@@ -68,6 +84,7 @@ Missing or invalid fields safely fall back to `Default`. Key options:
 | `idle_display` | `enum` | `Auto` | `Auto`, `Clock`, `Lyrics`, `NextEvent`, `Pomodoro`, or `Minimal` |
 | `clock_timezone` | `string` | `"Local"` | `"Local"` or any IANA timezone (e.g. `"Asia/Jakarta"`) |
 | `font_name` | `string` | `""` | Installed device font name (empty uses system default) |
+| `text_align` | `enum` | `Left` | Text alignment: `Left`, `Center`, or `Right` |
 | `karaoke_lyric_mode` | `enum` | `Original` | Primary karaoke text: `Original`, `Romaji`, or `Translate` |
 | `lyric_offset_ms` | `i64` | `0` | Lyric sync offset in milliseconds (`-5000`–`5000`) |
 | `google_calendar_ics_url` | `string` | `""` | Secret iCal `.ics` URL for Google Calendar sync |
@@ -93,7 +110,11 @@ cargo run -- --spike-notifications  # Verify OS notification listener access and
 liebert-dynamic-island/
 ├── Cargo.toml
 ├── AGENTS.md
+├── assets/                      # Shared .desktop entry & 256x256 app icon
 ├── docs/                        # Obsidian project notes & MVP PRD
+├── installer/windows/           # NSIS installer script
+├── packaging/aur/               # Arch Linux PKGBUILD + .SRCINFO
+├── scripts/                     # AppImage & Linux release build scripts
 └── src/
     ├── main.rs                  # Entry point, CLI flags, & background workers
     ├── config.rs                # Local config.toml persistence & defaults
@@ -119,4 +140,7 @@ liebert-dynamic-island/
 cargo test                                 # Run all unit tests
 cargo clippy --all-targets -- -D warnings  # Run Clippy with warnings treated as errors
 cargo build --release                      # Build stripped LTO release binary
+./scripts/build-linux-release.sh           # Linux tar.gz + AppImage in dist/
+# Windows (with NSIS installed, from repo root):
+#   makensis /DAPP_VERSION=0.1.0 installer\windows\installer.nsi
 ```

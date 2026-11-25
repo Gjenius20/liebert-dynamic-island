@@ -10,6 +10,22 @@ tags:
 
 ## 2026-11-26
 ### Added
+- `src/config.rs`, `src/ui/settings.rs`, `src/ui/mod.rs`: Menambahkan preferensi **`TextAlign`** (`Left` / `Center` / `Right`, default `Left`) dengan tombol pilihan **Text Alignment** di tab **Appearance** Settings. Alignment diterapkan pada lirik idle/kartu musik (termasuk karaoke, romaji, dan terjemahan yang digambar manual), judul/body notifikasi compact & expanded, judul/artis lagu, clock/minimal dot, serta daftar todo/kalendar. Lihat [[01 - Arsitektur & Spesifikasi]] dan [[03 - Catatan Rapat & Keputusan]].
+- `packaging/aur/PKGBUILD`, `packaging/aur/.SRCINFO`, `installer/windows/installer.nsi`, `assets/`, `scripts/build-linux-release.sh`: Menambahkan paket AUR (build dari tag `v0.1.0`, pasang binary + `.desktop` + ikon), installer NSIS Windows (shortcut Start Menu & uninstaller), aset desktop/icon bersama, dan skrip kemasan Linux yang menghasilkan `.tar.gz` alongside AppImage. Lihat [[01 - Arsitektur & Spesifikasi]] dan [[03 - Catatan Rapat & Keputusan]] (ADR-017).
+
+### Fixed
+- `src/ui/mod.rs`, `src/platform/wayland_layer.rs`: Memperbaiki bug Linux yang membuat aplikasi terasa selalu **force-close**:
+  - Root viewport kini membatalkan `close_requested()` dari window manager (`ViewportCommand::CancelClose`); keluar hanya lewat menu **Exit** di tray (`TrayAction::Exit` → `ViewportCommand::Close` di mode eframe, `want_exit` di layer-shell).
+  - Saat auto-hide/fullscreen di Linux, jendela tidak lagi disembunyikan (`Visible(false)`) melainkan dikecilkan ke `1×1` seperti layer-shell, sehingga proses tetap hidup dan bisa muncul kembali lewat hover.
+  - Compositor yang menutup `wl_surface` layer-shell kini memicu **fallback eframe** (`Err` → `main.rs`) alih-alih dianggap sukses dan menghentikan proses. Lihat [[03 - Catatan Rapat & Keputusan]] (ADR-016).
+- `src/platform/wayland_layer.rs`: Mengatasi kebocoran tekstur GPU dengan selalu meneruskan `textures_delta` ke `painter.paint_and_update_textures` walau pill sedang tersembunyi (sebelumnya delta `free` dibuang, sehingga tekstur GL tidak pernah dilepaskan sampai proses mati). Loop Wayland juga kini melewati tessellation/GL saat tidak ada redraw/animasi.
+- `src/state.rs`, `src/lyrics.rs`, `src/ui/mod.rs`, `src/ui/settings.rs`: Membatasi pertumbuhan RAM jangka panjang: antrean notifikasi dibatasi 32 item (FIFO, `MAX_QUEUED_NOTIFICATIONS`), cache lirik mentah/enriched memakai `BoundedCache` (32/64 entri, kunci tanpa `duration_secs` yang sering berubah), key alert kalender dipangkas ke 1 hari, gradient texture cache dikuantisasi, dan pemindaian font hanya dilakukan sekali (sentinel `Option`) agar tidak mengulang walk direktori tiap frame.
+
+### Changed
+- `docs/02 - Daftar Tugas & Backlog.md`, `docs/00 - Dashboard Proyek.md`, `docs/01 - Arsitektur & Spesifikasi.md`, `docs/03 - Catatan Rapat & Keputusan.md`: Mencatat fitur alignment, perbaikan daur hidup Linux, dan pembatasan cache. `cargo test` 41 passed & `cargo clippy --all-targets -- -D warnings` bersih.
+- `.github/workflows/release.yml`, `scripts/build-appimage.sh`, `README.md`: Job Linux kini memakai `build-linux-release.sh` (AppImage + tar.gz), job Windows memasang NSIS dan menghasilkan `*-setup.exe` di samping `.zip`, serta release mencakup bundel AUR. Tabel instalasi prebuilt dan opsi `text_align` ditambahkan ke README. AppImage & tar.gz dibangun dan diverifikasi lokal; installer Windows dibangun oleh CI.
+
+### Added
 - `LICENSE.md`, `Cargo.toml`: Menambahkan berkas lisensi resmi **GNU General Public License v3.0** (`GPL-3.0-or-later`, selaras dengan dependensi `kakasi 0.1`).
 - `src/lyrics.rs`, `src/ui/mod.rs`: Menambahkan animasi transisi **fade-up / fade-down** (`240 ms`, cubic ease-out, terklip di dalam baris pill) saat berganti baris lirik dan terjemahan di pill mode (`IdleDisplayMode::Lyrics`: naik ke atas saat maju ke baris berikutnya dan turun ke bawah saat mundur/seek ke baris sebelumnya) beserta unit test `lyric_transition_fades_up_and_down_and_finishes`.
 - `.github/workflows/release.yml`: Menambahkan workflow CI/CD GitHub Actions untuk membangun dan menerbitkan release Windows (`x86_64-pc-windows-msvc` `.zip`) dan Linux (`AppImage` + `.tar.gz`) saat push tag `v*` atau `workflow_dispatch`.

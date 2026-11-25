@@ -65,7 +65,7 @@ struct WaylandState {
     empty_region: Option<Region>,
     pointer: Option<wl_pointer::WlPointer>,
     configured: bool,
-    exit: bool,
+    surface_closed: bool,
     needs_redraw: bool,
     scale_factor: i32,
     logical_width: u32,
@@ -173,7 +173,7 @@ impl OutputHandler for WaylandState {
 
 impl LayerShellHandler for WaylandState {
     fn closed(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _layer: &LayerSurface) {
-        self.exit = true;
+        self.surface_closed = true;
     }
 
     fn configure(
@@ -343,6 +343,11 @@ fn map_wayland_button(button: u32) -> Option<PointerButton> {
     }
 }
 
+/// Skip egui tessellation/GL work when nothing changed and no animation deadline passed.
+fn should_draw(needs_redraw: bool, repaint_after: Duration, since_last_draw: Duration) -> bool {
+    needs_redraw || repaint_after.is_zero() || since_last_draw >= repaint_after
+}
+
 fn spawn_settings_ipc_listener(
     tx: mpsc::Sender<SettingsIpcCmd>,
     ping: calloop::ping::Ping,
@@ -468,7 +473,7 @@ pub fn try_run_layer_shell(
         empty_region,
         pointer: None,
         configured: false,
-        exit: false,
+        surface_closed: false,
         needs_redraw: true,
         scale_factor: 1,
         logical_width: init_w,
@@ -478,13 +483,13 @@ pub fn try_run_layer_shell(
         pending_events: Vec::new(),
     };
 
-    while !wl_state.configured && !wl_state.exit {
+    while !wl_state.configured && !wl_state.surface_closed {
         event_queue
             .blocking_dispatch(&mut wl_state)
             .map_err(|e| format!("Wayland initial configure failed: {e}"))?;
     }
-    if wl_state.exit {
-        return Ok(());
+    if wl_state.surface_closed {
+        return Err("wlr-layer-shell surface closed before first configure".to_owned());
     }
 
     let display_ptr = NonNull::new(conn.backend().display_ptr() as *mut c_void)
@@ -587,6 +592,8 @@ pub fn try_run_layer_shell(
     let mut applied_margin_top = init_margin_top;
     let mut applied_visible = true;
     let mut applied_scale = wl_state.scale_factor.max(1);
+    let mut fallback_reason: Option<String> = None;
+    let mut last_draw = Instant::now();
 
     loop {
         while let Ok(cmd) = settings_rx.try_recv() {
@@ -616,7 +623,11 @@ pub fn try_run_layer_shell(
             wl_state.pointer_inside,
         );
 
-        if step.want_exit || wl_state.exit {
+        if step.want_exit {
+            break;
+        }
+        if wl_state.surface_closed {
+            fallback_reason = Some("wlr-layer-shell surface closed by compositor".to_owned());
             break;
         }
         if step.open_settings_requested {
@@ -676,6 +687,18 @@ pub fn try_run_layer_shell(
             wl_state.needs_redraw = true;
         }
 
+        if !should_draw(wl_state.needs_redraw, step.repaint_after, last_draw.elapsed()) {
+            if event_loop
+                .dispatch(Some(Duration::from_millis(20)), &mut wl_state)
+                .is_err()
+            {
+                fallback_reason = Some("Wayland event loop dispatch failed".to_owned());
+                break;
+            }
+            continue;
+        }
+        last_draw = Instant::now();
+
         let phys_w_px = (applied_w * cur_scale as u32).max(1);
         let phys_h_px = (applied_h * cur_scale as u32).max(1);
         let ppp = cur_scale as f32;
@@ -704,14 +727,14 @@ pub fn try_run_layer_shell(
                 .viewport(0, 0, phys_w_px as i32, phys_h_px as i32);
         }
         painter.clear([phys_w_px, phys_h_px], [0.0, 0.0, 0.0, 0.0]);
-        if step.visible {
-            painter.paint_and_update_textures(
-                [phys_w_px, phys_h_px],
-                ppp,
-                &clipped_primitives,
-                &mut full_output.textures_delta,
-            );
-        }
+        // Always drain texture `set`/`free` deltas, even while the pill is hidden:
+        // dropping them leaks GPU textures until process exit.
+        painter.paint_and_update_textures(
+            [phys_w_px, phys_h_px],
+            ppp,
+            &clipped_primitives,
+            &mut full_output.textures_delta,
+        );
         let _ = gl_surface.swap_buffers(&gl_context);
         let _ = conn.flush();
         wl_state.needs_redraw = false;
@@ -722,10 +745,28 @@ pub fn try_run_layer_shell(
             step.repaint_after.min(Duration::from_millis(80))
         };
         if event_loop.dispatch(Some(wait), &mut wl_state).is_err() {
+            fallback_reason = Some("Wayland event loop dispatch failed".to_owned());
             break;
         }
     }
 
     painter.destroy();
-    Ok(())
+    match fallback_reason {
+        Some(reason) => Err(reason),
+        None => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wayland_redraw_is_skipped_until_something_changes() {
+        let interval = Duration::from_millis(80);
+        assert!(should_draw(true, interval, Duration::ZERO));
+        assert!(should_draw(false, Duration::ZERO, Duration::ZERO));
+        assert!(!should_draw(false, interval, Duration::from_millis(20)));
+        assert!(should_draw(false, interval, interval));
+    }
 }

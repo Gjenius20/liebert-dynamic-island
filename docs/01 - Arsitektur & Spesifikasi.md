@@ -25,13 +25,20 @@ liebert-dynamic-island/
 ├── LICENSE.md                   # Lisensi GPL-3.0-or-later
 ├── AGENTS.md                    # Panduan kolaborasi & aturan repo
 ├── .github/workflows/
-│   └── release.yml              # GitHub Actions release build (Windows & Linux + AppImage)
+│   └── release.yml              # GitHub Actions: AppImage + tar.gz, zip + NSIS installer, bundel AUR
+├── assets/                      # .desktop & ikon 256x256 bersama (AppImage, tar.gz, AUR)
 ├── docs/                        # Dokumentasi Obsidian & PRD
+├── installer/windows/
+│   └── installer.nsi            # Installer NSIS Windows (per-user, Start Menu & uninstaller)
+├── packaging/aur/
+│   ├── PKGBUILD                 # Paket AUR: build dari tag v0.1.0 via cargo --locked
+│   └── .SRCINFO                 # Metadata AUR yang dihasilkan makepkg --printsrcinfo
 ├── scripts/
-│   └── build-appimage.sh        # Skrip build & packaging AppImage Linux (x86_64)
+│   ├── build-appimage.sh        # Packaging AppImage Linux (x86_64)
+│   └── build-linux-release.sh   # Build binary + AppImage + tar.gz Linux
 └── src/
     ├── main.rs                  # Entry point, CLI flags, & spawn background workers
-    ├── config.rs                # Load/save config.toml (size, colors, presets, clock, idle mode, .ics URL)
+    ├── config.rs                # Load/save config.toml (size, colors, font, TextAlign, presets, clock, idle mode, .ics URL)
     ├── state.rs                 # Island state machine (Idle, Compact, Expanded), queue, & auto-hide delay
     ├── clock.rs                 # Jam digital & formatter zona waktu IANA (chrono-tz)
     ├── lyrics.rs                # LRC / Enhanced LRC parser, karaoke progress, romaji & translate worker
@@ -50,6 +57,12 @@ liebert-dynamic-island/
         └── wayland_layer.rs     # Native Wayland wlr-layer-shell EGL/egui_glow overlay & Settings IPC runner
 ```
 
+### Distribusi & Rilis
+- **`scripts/build-linux-release.sh`:** `cargo build --release --locked` → `build-appimage.sh` → staging `liebert-dynamic-island-linux-x86_64/` (binary, `LICENSE.md`, `README.md`, `.desktop`, ikon) → `dist/*.tar.gz` dan `dist/*.AppImage`.
+- **`installer/windows/installer.nsi`:** Instalasi NSIS per-user di `%LOCALAPPDATA%\Programs\Liebert Dynamic Island`, shortcut Start Menu, entri Uninstall di registry HKCU, dan uninstaller. Dibangun di job Windows GitHub Actions dengan `makensis` dari direktori staging.
+- **`packaging/aur/`:** `PKGBUILD` meng-clone tag `v$pkgver`, membangun dengan `cargo build --release --locked`, lalu memasang binary ke `/usr/bin`, lisensi, `.desktop`, dan ikon. `.SRCINFO` digenerate via `makepkg --printsrcinfo`. Publikasi ke AUR masih manual (butuh akun maintainer); bundel keduanya ikut sebagai aset release.
+- **`.github/workflows/release.yml`:** Tag `v*` memicu build Linux + Windows, lalu `softprops/action-gh-release` mengunggah AppImage, tar.gz, zip, installer `.exe`, dan bundel AUR.
+
 ## Skema Data & State Machine
 ### Notification Payload
 ```rust
@@ -67,6 +80,11 @@ pub struct NotificationItem {
 - **`Idle`:** Pill compact di top-center atau menyatu seamless dengan tepi atas monitor (`y = 0`) lewat transisi `notch_morph` (`Top Notch` ↔ `Floating Island`), menampilkan mini cover + lirik karaoke (`Original` atau `Romaji` sesuai `karaoke_lyric_mode`, disinkronkan via `duration` LRCLIB, `end_ms` jeda instrumental, & `lyric_offset_ms`) + 3-bar equalizer saat musik diputar (dengan opsi gradasi `#000` ke warna dominan album di paling bawah via `compact_album_gradient`), jam zona waktu, atau jadwal terdekat; otomatis tersembunyi saat `auto_hide` atau `hide_in_fullscreen` aktif.
 - **`Compact`:** Pill melebar menampilkan avatar berwarna brand aplikasi (`WhatsApp`, `Discord`, `Gmail`, browser, dll.), badge nama aplikasi terpisah tanpa overlap, judul, preview singkat, serta indikator jumlah antrean (turut mendukung gradasi `#000` → warna album bila musik aktif & `compact_album_gradient` menyala); timer auto-collapse default 5 detik.
 - **`Expanded`:** Aktif saat hover pada `Compact` (menjeda timer), menampilkan slot kiri/kanan terklip bersih (tab `Home`, `♪ Music`, `☑ N`, `Cal`, `Timer` + tombol cepat ganti mode `Island`/`Notch` + tombol `⚙` yang membawa jendela Settings ke depan layar via `bring_window_to_front`), dan `ScrollArea` pada kolom lirik kanan. Juga menghormati opsi `show_notifications`.
+
+### Preferensi Teks & Pembatasan Memori
+- **`TextAlign` (`src/config.rs`):** enum `Left` (default) / `Center` / `Right`, disimpan sebagai `text_align` di `config.toml` dan dipilih lewat tombol di tab Appearance Settings. `egui_align` memetakan ke `egui::Align`, sedangkan `aligned_galley_x` menyelaraskan teks/galley yang digambar manual dengan `Painter` (karaoke, judul lagu, dot clock).
+- **Bounded caches:** `IslandState.queue` maksimal `MAX_QUEUED_NOTIFICATIONS = 32`, worker lirik memakai `BoundedCache` (raw 32, enriched 64) tanpa `duration_secs` pada kunci, dan `alerted_events` dipangkas ke `ALERT_RETENTION_SECS = 86_400`. Gradient texture cache dikuantisasi per 8 kanal warna agar animasi spring tidak meng-upload ulang tekstur tiap frame.
+- **Daur hidup overlay:** `IslandApp::ui` membatalkan `close_requested()` root viewport; hanya `TrayAction::Exit` yang menutup aplikasi. Di Linux, auto-hide mengecilkan viewport ke `1×1` (bukan `Visible(false)`), dan layer-shell yang ditutup compositor mengembalikan `Err` agar `main.rs` menjalankan fallback eframe.
 
 ## Alur Komponen Utama
 1. **Startup:** `config.rs` membaca `config.toml` → `tray.rs` membuat ikon tray → `platform` memunculkan listener notifikasi di background thread/async task → `ui` membuka overlay window dalam state `Idle`.

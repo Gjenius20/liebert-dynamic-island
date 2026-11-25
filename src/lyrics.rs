@@ -1,4 +1,5 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use std::hash::Hash;
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
@@ -16,6 +17,42 @@ pub const TRANSLATE_LANGUAGES: &[(&str, &str)] = &[
     ("ar", "Arabic"),
     ("es", "Spanish"),
 ];
+
+const MAX_RAW_LYRICS_CACHE: usize = 32;
+const MAX_ENRICHED_LYRICS_CACHE: usize = 64;
+
+/// FIFO cache: the worker lives for the whole process, so lyric text must not accumulate forever.
+struct BoundedCache<K: Clone + Eq + Hash, V> {
+    limit: usize,
+    values: HashMap<K, V>,
+    order: VecDeque<K>,
+}
+
+impl<K: Clone + Eq + Hash, V> BoundedCache<K, V> {
+    fn new(limit: usize) -> Self {
+        Self {
+            limit,
+            values: HashMap::new(),
+            order: VecDeque::new(),
+        }
+    }
+
+    fn get(&self, key: &K) -> Option<&V> {
+        self.values.get(key)
+    }
+
+    fn insert(&mut self, key: K, value: V) {
+        if !self.values.contains_key(&key) {
+            self.order.push_back(key.clone());
+        }
+        self.values.insert(key, value);
+        while self.order.len() > self.limit {
+            if let Some(oldest) = self.order.pop_front() {
+                self.values.remove(&oldest);
+            }
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LyricWord {
@@ -347,20 +384,22 @@ pub fn spawn_lyrics_worker(
                 .timeout_global(Some(Duration::from_secs(5)))
                 .build();
             let agent: Agent = config.into();
-            type EnrichedCacheKey = (String, String, Option<u64>, Option<String>, bool);
-            let mut raw_cache: HashMap<(String, String, Option<u64>), LyricsData> = HashMap::new();
-            let mut enriched_cache: HashMap<EnrichedCacheKey, LyricsData> = HashMap::new();
+            type EnrichedCacheKey = (String, String, Option<String>, bool);
+            let mut raw_cache: BoundedCache<(String, String), LyricsData> =
+                BoundedCache::new(MAX_RAW_LYRICS_CACHE);
+            let mut enriched_cache: BoundedCache<EnrichedCacheKey, LyricsData> =
+                BoundedCache::new(MAX_ENRICHED_LYRICS_CACHE);
 
             while let Ok(mut req) = req_rx.recv() {
                 while let Ok(newer) = req_rx.try_recv() {
                     req = newer;
                 }
 
-                let track_key = (req.artist.clone(), req.title.clone(), req.duration_secs);
+                // MPRIS players often report duration 0 then the real value: exclude it from keys.
+                let track_key = (req.artist.clone(), req.title.clone());
                 let full_key = (
                     req.artist.clone(),
                     req.title.clone(),
-                    req.duration_secs,
                     req.translate_lang.clone(),
                     req.need_romaji,
                 );
@@ -373,7 +412,7 @@ pub fn spawn_lyrics_worker(
                     } else {
                         let fetched =
                             fetch_lyrics(&agent, &req.artist, &req.title, req.duration_secs);
-                        raw_cache.insert(track_key, fetched.clone());
+                        raw_cache.insert(track_key.clone(), fetched.clone());
                         fetched
                     };
                     let enriched = enrich_lyrics_data(
@@ -649,6 +688,20 @@ fn strip_title_noise(title: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bounded_cache_evicts_oldest_and_keeps_capacity() {
+        let mut cache = BoundedCache::new(2);
+        cache.insert("a", 1);
+        cache.insert("b", 2);
+        cache.insert("c", 3);
+        assert_eq!(cache.get(&"a"), None);
+        assert_eq!(cache.get(&"b"), Some(&2));
+        assert_eq!(cache.get(&"c"), Some(&3));
+        cache.insert("c", 30);
+        assert_eq!(cache.order.len(), 2);
+        assert_eq!(cache.get(&"c"), Some(&30));
+    }
 
     #[test]
     fn parse_lrc_handles_multi_tags_and_sorts() {

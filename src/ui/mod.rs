@@ -18,7 +18,7 @@ use crate::calendar::{
     CalendarCommand, CalendarEvent, format_countdown, format_local_time, upcoming_events,
 };
 use crate::clock::format_clock;
-use crate::config::{Config, IdleDisplayMode, KaraokeLyricMode};
+use crate::config::{Config, IdleDisplayMode, KaraokeLyricMode, TextAlign};
 use crate::lyrics::{
     LyricsData, LyricsRequest, active_karaoke, has_cjk_or_hangul,
 };
@@ -37,6 +37,8 @@ pub use crate::ui::settings::SETTINGS_WINDOW_TITLE;
 use crate::ui::settings::{SettingsTab, SettingsWindowState, render_settings_viewport};
 
 pub const WINDOW_TITLE: &str = "Liebert Dynamic Island";
+/// Keep fired calendar alert keys for one day; recurring events must not grow the set forever.
+const ALERT_RETENTION_SECS: i64 = 86_400;
 
 pub fn apply_configured_fonts(ctx: &egui::Context, font_name: &str) {
     let mut defs = egui::FontDefinitions::default();
@@ -200,7 +202,7 @@ pub struct IslandApp {
     last_egui_hovered: bool,
     demo_deadline: Option<Instant>,
     pomodoro: PomodoroTimer,
-    installed_fonts: Vec<InstalledFont>,
+    installed_fonts: Option<Vec<InstalledFont>>,
     font_search: String,
     applied_font_name: String,
     pill_lyric_anim: PillLyricTransition,
@@ -279,7 +281,7 @@ impl IslandApp {
             last_egui_hovered: false,
             demo_deadline: demo_mode.then(|| now + Duration::from_secs(1)),
             pomodoro,
-            installed_fonts: Vec::new(),
+            installed_fonts: None,
             font_search: String::new(),
             applied_font_name,
             pill_lyric_anim: PillLyricTransition::default(),
@@ -442,6 +444,10 @@ impl IslandApp {
         if let Some(tray) = &self.tray {
             tray.update_status(&self.state.listener_status, self.state.paused);
         }
+    }
+
+    fn prune_alerted_events(&mut self, now_utc: i64) {
+        retain_recent_alerts(&mut self.alerted_events, now_utc);
     }
 
     fn current_playback_ms(&self, now: Instant) -> u64 {
@@ -614,6 +620,7 @@ impl IslandApp {
                 PlatformEvent::CalendarUpdated(res) => match res {
                     Ok(events) => {
                         self.calendar_status = format!("Synced ({} events)", events.len());
+                        self.prune_alerted_events(chrono::Utc::now().timestamp());
                         self.calendar_events = events;
                     }
                     Err(err) => {
@@ -655,7 +662,6 @@ impl IslandApp {
                     }
                     TrayAction::Exit => {
                         want_exit = true;
-                        ctx.send_viewport_cmd(ViewportCommand::Close);
                     }
                 }
             }
@@ -735,7 +741,7 @@ impl IslandApp {
         accent: [u8; 3],
         pill_mode: bool,
     ) {
-        let key = (base_bg, accent, pill_mode);
+        let key = gradient_cache_key(base_bg, accent, pill_mode);
         if self.gradient_key == Some(key) && self.gradient_tex.is_some() {
             return;
         }
@@ -785,6 +791,10 @@ impl IslandApp {
     fn muted_color32(&self) -> Color32 {
         let [r, g, b] = self.config.text_color;
         Color32::from_rgba_unmultiplied(r, g, b, 170)
+    }
+
+    fn text_align(&self) -> egui::Align {
+        egui_align(self.config.text_align)
     }
 
     fn sync_runtime_config(
@@ -991,9 +1001,13 @@ impl IslandApp {
 
         let visible = self.state.should_be_visible(now);
         let became_visible = visible && !self.last_visible;
-        if visible != self.last_visible {
+        let visibility_changed = visible != self.last_visible;
+        if visibility_changed {
             self.last_visible = visible;
-            if !platform::set_overlay_visible(WINDOW_TITLE, visible)
+            // Linux has no native show/hide bridge: hiding the viewport looks like a force-close.
+            // Keep the window alive and shrink it to 1x1 instead (same trick as the layer shell).
+            if cfg!(windows)
+                && !platform::set_overlay_visible(WINDOW_TITLE, visible)
                 && mode == OverlayBackendMode::Eframe
             {
                 ctx.send_viewport_cmd(ViewportCommand::Visible(visible));
@@ -1081,28 +1095,31 @@ impl IslandApp {
                     self.last_passthrough = Some(passthrough);
                     platform::set_overlay_click_through(WINDOW_TITLE, passthrough);
                 }
-            } else if (rounded_size - self.applied_size).length_sq() > 0.25
-                || (top_y - self.applied_top_y).abs() > 0.25
-                || hover_changed
-                || became_visible
-            {
-                self.applied_size = rounded_size;
-                self.applied_top_y = top_y;
-                let screen_w = platform::primary_monitor_logical_width(ctx.pixels_per_point());
-                let x = ((screen_w - rounded_size.x) * 0.5).max(0.0);
-                ctx.send_viewport_cmd(ViewportCommand::InnerSize(rounded_size));
-                if platform::should_send_outer_position() {
-                    ctx.send_viewport_cmd(ViewportCommand::OuterPosition(Pos2::new(x, top_y)));
-                }
-                if visible {
-                    platform::sync_overlay_window(
-                        WINDOW_TITLE,
-                        x,
-                        top_y,
-                        rounded_size.x,
-                        rounded_size.y,
-                        self.config.notch_dock_mode,
-                    );
+            } else {
+                let target_window_size = if visible { rounded_size } else { Vec2::splat(1.0) };
+                if (target_window_size - self.applied_size).length_sq() > 0.25
+                    || (top_y - self.applied_top_y).abs() > 0.25
+                    || hover_changed
+                    || visibility_changed
+                {
+                    self.applied_size = target_window_size;
+                    self.applied_top_y = top_y;
+                    let screen_w = platform::primary_monitor_logical_width(ctx.pixels_per_point());
+                    let x = ((screen_w - rounded_size.x) * 0.5).max(0.0);
+                    ctx.send_viewport_cmd(ViewportCommand::InnerSize(target_window_size));
+                    if platform::should_send_outer_position() {
+                        ctx.send_viewport_cmd(ViewportCommand::OuterPosition(Pos2::new(x, top_y)));
+                    }
+                    if visible {
+                        platform::sync_overlay_window(
+                            WINDOW_TITLE,
+                            x,
+                            top_y,
+                            rounded_size.x,
+                            rounded_size.y,
+                            self.config.notch_dock_mode,
+                        );
+                    }
                 }
             }
         }
@@ -1386,10 +1403,17 @@ impl eframe::App for IslandApp {
     }
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        let _ = self.step_logic(ctx, OverlayBackendMode::Eframe, false);
+        let step = self.step_logic(ctx, OverlayBackendMode::Eframe, false);
+        // Only the tray "Exit" item may terminate the app. A WM close request is cancelled in `ui`.
+        if step.want_exit {
+            ctx.send_viewport_cmd(ViewportCommand::Close);
+        }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        if ui.input(|i| i.viewport().close_requested()) {
+            ui.ctx().send_viewport_cmd(ViewportCommand::CancelClose);
+        }
         self.render_island_ui(ui, true);
     }
 }
@@ -1399,6 +1423,7 @@ impl IslandApp {
         let accent = self.effective_accent();
         let text_col = self.text_color32();
         let muted = self.muted_color32();
+        let align = self.text_align();
         let s = self.config.scale;
 
         if let ListenerStatus::AccessDenied(msg) = &self.state.listener_status {
@@ -1483,7 +1508,7 @@ impl IslandApp {
                         let text_col_h = if has_tr_space { 32.0 * s } else { 20.0 * s };
                         ui.allocate_ui_with_layout(
                             Vec2::new(text_w, text_col_h),
-                            egui::Layout::top_down(egui::Align::LEFT),
+                            egui::Layout::top_down(align),
                             |ui| {
                                 ui.set_clip_rect(ui.max_rect());
                                 ui.spacing_mut().item_spacing.y = 1.0 * s;
@@ -1520,6 +1545,7 @@ impl IslandApp {
                                                     out_col,
                                                     out_col,
                                                     out_frac * shift_px,
+                                                    align,
                                                 );
                                             }
                                             let in_dim = scale_color_alpha(muted, ease);
@@ -1538,6 +1564,7 @@ impl IslandApp {
                                                 in_dim,
                                                 in_lit,
                                                 in_frac * shift_px,
+                                                align,
                                             );
                                         } else if self.config.karaoke_lyrics {
                                             render_karaoke_line(
@@ -1547,6 +1574,7 @@ impl IslandApp {
                                                 font,
                                                 muted,
                                                 text_col,
+                                                align,
                                             );
                                         } else {
                                             ui.add(
@@ -1604,6 +1632,7 @@ impl IslandApp {
                                                 out_col,
                                                 out_col,
                                                 out_frac * tr_shift,
+                                                align,
                                             );
                                         }
                                         if let Some(tr) = pill_tr {
@@ -1617,6 +1646,7 @@ impl IslandApp {
                                                 in_col,
                                                 in_col,
                                                 in_frac * tr_shift,
+                                                align,
                                             );
                                         }
                                     }
@@ -1748,7 +1778,7 @@ impl IslandApp {
                         ..Default::default()
                     },
                 );
-                render_dot_label(ui, dot_color, 3.0 * s, job);
+                render_dot_label(ui, dot_color, 3.0 * s, job, align);
                 return;
             }
             _ => {}
@@ -1780,6 +1810,7 @@ impl IslandApp {
         let brand = app_brand_color(&item.app_name, accent);
         let text_col = self.text_color32();
         let muted = self.muted_color32();
+        let align = self.text_align();
         let s = self.config.scale;
         let queued = self.state.queued_count();
 
@@ -1790,7 +1821,7 @@ impl IslandApp {
             let text_w = (ui.available_width() - badge_reserve).max(60.0);
             ui.allocate_ui_with_layout(
                 Vec2::new(text_w, 34.0 * s),
-                egui::Layout::top_down(egui::Align::LEFT),
+                egui::Layout::top_down(align),
                 |ui| {
                     ui.set_clip_rect(ui.max_rect());
                     ui.spacing_mut().item_spacing.y = 2.0 * s;
@@ -1870,6 +1901,7 @@ impl IslandApp {
         let accent = self.effective_accent();
         let text_col = self.text_color32();
         let muted = self.muted_color32();
+        let align = self.text_align();
         let s = self.config.scale;
         let mode_btn_label = if self.config.notch_dock_mode {
             "Island"
@@ -1969,23 +2001,25 @@ impl IslandApp {
                 );
             });
             ui.add_space(6.0);
-            ui.label(
-                RichText::new(&item.title)
-                    .font(FontId::proportional(13.5 * s))
-                    .color(text_col)
-                    .strong(),
-            );
-            if !item.body.is_empty() {
-                ui.add_space(3.0);
-                ui.add(
-                    egui::Label::new(
-                        RichText::new(&item.body)
-                            .font(FontId::proportional(12.0 * s))
-                            .color(muted),
-                    )
-                    .wrap(),
+            ui.with_layout(egui::Layout::top_down(align), |ui| {
+                ui.label(
+                    RichText::new(&item.title)
+                        .font(FontId::proportional(13.5 * s))
+                        .color(text_col)
+                        .strong(),
                 );
-            }
+                if !item.body.is_empty() {
+                    ui.add_space(3.0);
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(&item.body)
+                                .font(FontId::proportional(12.0 * s))
+                                .color(muted),
+                        )
+                        .wrap(),
+                    );
+                }
+            });
             return;
         }
 
@@ -2357,6 +2391,7 @@ impl IslandApp {
         let accent_rgb = self.effective_accent_rgb();
         let text_col = self.text_color32();
         let muted = self.muted_color32();
+        let align = self.text_align();
         let s = self.config.scale;
 
         let Some(track) = self.media.clone() else {
@@ -2416,18 +2451,20 @@ impl IslandApp {
                     }
 
                     ui.add_space(6.0 * s);
-                    render_centered_truncated_text(
+                    render_aligned_truncated_text(
                         ui,
                         &track.title,
                         FontId::proportional(13.0 * s),
                         text_col,
+                        align,
                     );
                     if !track.artist.is_empty() {
-                        render_centered_truncated_text(
+                        render_aligned_truncated_text(
                             ui,
                             &track.artist,
                             FontId::proportional(11.0 * s),
                             muted,
+                            align,
                         );
                     }
 
@@ -2564,7 +2601,7 @@ impl IslandApp {
             // Right column: Multi-line wrapped Karaoke Lyric, Romaji, Translation & Upcoming preview.
             ui.allocate_ui_with_layout(
                 Vec2::new(right_w, body_h),
-                egui::Layout::top_down(egui::Align::LEFT),
+                egui::Layout::top_down(align),
                 |ui| {
                     ui.set_clip_rect(ui.max_rect());
                     egui::ScrollArea::vertical()
@@ -2628,6 +2665,7 @@ impl IslandApp {
                                         text_col,
                                         dim_white,
                                         wrap_w,
+                                        align,
                                     );
 
                                     if romaji_primary || translate_primary {
@@ -2640,6 +2678,7 @@ impl IslandApp {
                                             lit_romaji,
                                             dim_romaji,
                                             wrap_w,
+                                            align,
                                         );
                                     } else if self.config.romaji_lyrics
                                         && let Some(rom) = k.romaji
@@ -2653,6 +2692,7 @@ impl IslandApp {
                                             lit_romaji,
                                             dim_romaji,
                                             wrap_w,
+                                            align,
                                         );
                                     }
 
@@ -2930,6 +2970,7 @@ impl IslandApp {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_wrapped_karaoke(
     ui: &mut egui::Ui,
     text: &str,
@@ -2938,6 +2979,7 @@ fn render_wrapped_karaoke(
     lit_color: Color32,
     dim_color: Color32,
     max_width: f32,
+    align: egui::Align,
 ) {
     let wrap_w = max_width.max(40.0);
     let dim_galley = ui
@@ -2945,11 +2987,15 @@ fn render_wrapped_karaoke(
         .layout(text.to_owned(), font.clone(), dim_color, wrap_w);
     let lit_galley = ui.painter().layout(text.to_owned(), font, lit_color, wrap_w);
     let (rect, _) = ui.allocate_exact_size(dim_galley.size(), Sense::hover());
+    let draw_pos = Pos2::new(
+        aligned_galley_x(rect.left(), wrap_w, dim_galley.size().x, align),
+        rect.top(),
+    );
 
     let clip = ui.clip_rect();
     ui.painter()
         .with_clip_rect(clip)
-        .galley(rect.min, dim_galley.clone(), Color32::TRANSPARENT);
+        .galley(draw_pos, dim_galley.clone(), Color32::TRANSPARENT);
 
     let p = progress.clamp(0.0, 1.0);
     let total_w: f32 = dim_galley.rows.iter().map(|r| r.rect().width()).sum();
@@ -2958,7 +3004,7 @@ fn render_wrapped_karaoke(
         if rem <= 0.5 {
             break;
         }
-        let rr = placed.rect().translate(rect.min.to_vec2());
+        let rr = placed.rect().translate(draw_pos.to_vec2());
         let rw = rr.width().max(0.0);
         let lit_w = rem.min(rw);
         if lit_w > 0.5 {
@@ -2966,7 +3012,7 @@ fn render_wrapped_karaoke(
                 .intersect(clip);
             if row_clip.width() > 0.0 && row_clip.height() > 0.0 {
                 ui.painter().with_clip_rect(row_clip).galley(
-                    rect.min,
+                    draw_pos,
                     lit_galley.clone(),
                     Color32::TRANSPARENT,
                 );
@@ -2979,6 +3025,41 @@ fn render_wrapped_karaoke(
 fn lerp_u8(a: u8, b: u8, t: f32) -> u8 {
     let t = t.clamp(0.0, 1.0);
     ((a as f32) + ((b as f32) - (a as f32)) * t).round() as u8
+}
+
+fn egui_align(align: TextAlign) -> egui::Align {
+    match align {
+        TextAlign::Left => egui::Align::LEFT,
+        TextAlign::Center => egui::Align::Center,
+        TextAlign::Right => egui::Align::RIGHT,
+    }
+}
+
+fn quantize_channel(value: u8) -> u8 {
+    (value / 8).saturating_mul(8)
+}
+
+/// Quantize animated colors so a notch spring does not re-upload the gradient texture every frame.
+fn gradient_cache_key(
+    base_bg: [u8; 4],
+    accent: [u8; 3],
+    pill_mode: bool,
+) -> ([u8; 4], [u8; 3], bool) {
+    (
+        base_bg.map(quantize_channel),
+        accent.map(quantize_channel),
+        pill_mode,
+    )
+}
+
+/// X position of a manually painted galley inside a column, clamped when it is wider than the column.
+fn aligned_galley_x(origin: f32, available: f32, content: f32, align: egui::Align) -> f32 {
+    origin + (available - content).max(0.0) * align.to_factor()
+}
+
+fn retain_recent_alerts(alerts: &mut HashSet<(String, i64)>, now_utc: i64) {
+    let cutoff = now_utc - ALERT_RETENTION_SECS;
+    alerts.retain(|(_, start_utc)| *start_utc >= cutoff);
 }
 
 /// Underdamped harmonic spring step (macOS/iOS Dynamic Island style bounce) with sub-stepping.
@@ -3370,7 +3451,13 @@ fn truncate_with_ellipsis(text: &str, fits: impl Fn(&str) -> bool) -> String {
     chars[..lo].iter().collect::<String>() + "…"
 }
 
-fn render_centered_truncated_text(ui: &mut egui::Ui, text: &str, font: FontId, color: Color32) {
+fn render_aligned_truncated_text(
+    ui: &mut egui::Ui,
+    text: &str,
+    font: FontId,
+    color: Color32,
+    align: egui::Align,
+) {
     let max_w = ui.available_width();
     let painter = ui.painter().clone();
     let shown = truncate_with_ellipsis(text, |t| {
@@ -3382,18 +3469,27 @@ fn render_centered_truncated_text(ui: &mut egui::Ui, text: &str, font: FontId, c
     });
     let galley = painter.layout_no_wrap(shown, font, color);
     let (rect, _) = ui.allocate_exact_size(Vec2::new(max_w, galley.size().y), Sense::hover());
-    let pos = Pos2::new(rect.center().x - galley.size().x * 0.5, rect.top());
+    let pos = Pos2::new(
+        aligned_galley_x(rect.left(), max_w, galley.size().x, align),
+        rect.top(),
+    );
     painter
         .with_clip_rect(rect)
         .galley(pos, galley, Color32::TRANSPARENT);
 }
 
-fn render_dot_label(ui: &mut egui::Ui, dot_color: Color32, dot_radius: f32, job: LayoutJob) {
+fn render_dot_label(
+    ui: &mut egui::Ui,
+    dot_color: Color32,
+    dot_radius: f32,
+    job: LayoutJob,
+    align: egui::Align,
+) {
     let galley = ui.painter().layout_job(job);
     let (rect, _) = ui.allocate_exact_size(ui.available_size(), Sense::hover());
     let gap = dot_radius * 2.0;
     let total_w = dot_radius * 2.0 + gap + galley.size().x;
-    let start_x = rect.center().x - total_w * 0.5;
+    let start_x = aligned_galley_x(rect.left(), rect.width(), total_w, align);
     let cy = rect.center().y;
     ui.painter()
         .circle_filled(Pos2::new(start_x + dot_radius, cy), dot_radius, dot_color);
@@ -3555,6 +3651,7 @@ fn paint_karaoke_in_rect(
     dim_color: Color32,
     lit_color: Color32,
     y_offset: f32,
+    align: egui::Align,
 ) {
     let avail_w = rect.width().max(24.0);
     let p = progress.clamp(0.0, 1.0);
@@ -3567,7 +3664,8 @@ fn paint_karaoke_in_rect(
         0.0
     };
     let draw_y = rect.center().y - lit_galley.size().y * 0.5 + y_offset;
-    let draw_pos = Pos2::new(rect.left() + scroll_x, draw_y);
+    let draw_x = aligned_galley_x(rect.left(), avail_w, text_w, align) + scroll_x;
+    let draw_pos = Pos2::new(draw_x, draw_y);
     let clipped = painter.with_clip_rect(rect);
 
     if p >= 0.999 {
@@ -3580,7 +3678,10 @@ fn paint_karaoke_in_rect(
 
     let lit_width = (text_w * p).max(0.0);
     if lit_width > 0.5 {
-        let lit_clip = Rect::from_min_max(rect.min, Pos2::new(rect.left() + lit_width, rect.bottom()));
+        let lit_clip = Rect::from_min_max(
+            Pos2::new(draw_x, rect.top()),
+            Pos2::new(draw_x + lit_width, rect.bottom()),
+        );
         painter
             .with_clip_rect(lit_clip.intersect(rect))
             .galley(draw_pos, lit_galley, Color32::TRANSPARENT);
@@ -3594,6 +3695,7 @@ fn render_karaoke_line(
     font: FontId,
     dim_color: Color32,
     lit_color: Color32,
+    align: egui::Align,
 ) {
     let avail_w = ui.available_width().max(24.0);
     let row_h = 16.0f32.max(font.size + 3.0);
@@ -3607,6 +3709,7 @@ fn render_karaoke_line(
         dim_color,
         lit_color,
         0.0,
+        align,
     );
 }
 
@@ -3717,6 +3820,32 @@ mod tests {
         let cut = truncate_with_ellipsis("a very long song title", |t| t.chars().count() <= 8);
         assert!(cut.ends_with('…') && cut.chars().count() <= 8, "got: {cut}");
         assert_eq!(truncate_with_ellipsis("abc", |t| t.is_empty()), "…");
+    }
+
+    #[test]
+    fn aligned_galley_x_respects_left_center_right_and_overflow() {
+        assert_eq!(aligned_galley_x(10.0, 100.0, 40.0, egui::Align::LEFT), 10.0);
+        assert_eq!(aligned_galley_x(10.0, 100.0, 40.0, egui::Align::Center), 40.0);
+        assert_eq!(aligned_galley_x(10.0, 100.0, 40.0, egui::Align::RIGHT), 70.0);
+        assert_eq!(aligned_galley_x(10.0, 100.0, 140.0, egui::Align::RIGHT), 10.0);
+        assert_eq!(egui_align(TextAlign::Center), egui::Align::Center);
+    }
+
+    #[test]
+    fn gradient_cache_key_quantizes_animated_colors() {
+        let a = gradient_cache_key([16, 16, 20, 240], [110, 195, 255], false);
+        let b = gradient_cache_key([19, 22, 21, 244], [111, 198, 251], false);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn alerted_events_are_pruned_to_the_retention_window() {
+        let mut alerts = HashSet::new();
+        alerts.insert(("old".to_owned(), 100));
+        alerts.insert(("recent".to_owned(), 1_000_000));
+        retain_recent_alerts(&mut alerts, 1_000_000);
+        assert!(!alerts.iter().any(|(name, _)| name == "old"));
+        assert!(alerts.iter().any(|(name, _)| name == "recent"));
     }
 
     #[test]

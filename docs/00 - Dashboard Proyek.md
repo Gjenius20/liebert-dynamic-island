@@ -26,3 +26,8 @@ Membangun overlay **Dynamic Island** yang ringan (< 25 MB RAM idle), instan (< 5
 - [ ] **M2 — Core Overlay:** Implementasi `src/ui/mod.rs` & positioning Hyprland terverifikasi live (`140×30` → `340×58` top-center); menunggu uji visual penuh & DPI scaling Linux
 - [ ] **M3 — Notification Bridge:** Listener Windows & state/queue selesai (7 unit tests pass); build release Linux lolos & spike D-Bus OK, menunggu verifikasi runtime listener Linux (daemon notifikasi lain masih aktif)
 - [ ] **M4 — Tray, Config & Release:** System tray & `config.toml` selesai; menunggu `README.md`, uji manual, & benchmark RAM `--release`
+
+## Progres Tambahan (Terverifikasi)
+- [x] **Text Alignment di Settings:** Tombol `Left` / `Center` / `Right` (`src/config.rs`, `src/ui/settings.rs`, `src/ui/mod.rs`).
+- [x] **Daur Hidup & RAM Linux:** Close request WM dibatalkan, auto-hide memakai viewport `1×1`, layer-shell `closed` → fallback eframe, dan cache/antrean dibatasi agar RAM tidak terus naik. Lihat [[04 - Changelog & Dev Log]].
+- [x] **Distribusi v0.1.0:** AppImage + `.tar.gz` Linux, paket AUR (`PKGBUILD` + `.SRCINFO`), dan installer NSIS Windows siap; aset dipublikasikan lewat workflow release pada tag `v0.1.0`.

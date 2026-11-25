@@ -164,3 +164,25 @@ Log *Architecture Decision Records (ADR)* untuk proyek [[00 - Dashboard Proyek]]
   2. **Device Font Picker:** `collect_fonts_from_dirs` memindai direktori font OS (`.ttf`/`.otf`/`.ttc`) tanpa dependensi tambahan dan `apply_configured_fonts` menyisipkan font pilihan pada prioritas tertinggi `FontFamily::Proportional`.
   3. **Karaoke Translate & Pomodoro:** Menambah `KaraokeLyricMode::Translate` dan modul OS-agnostic `src/pomodoro.rs` (`Focus`/`ShortBreak`/`LongBreak`, notifikasi selesai fase, & countdown idle).
 - **Konsekuensi:** Seluruh preferensi tersimpan lokal di `config.toml`, tetap kompatibel dengan `#[serde(default)]`.
+
+## ADR-016: Text Alignment, Perlindungan Close Linux, & Batas Memori
+- **Tanggal:** 2026-11-26
+- **Status:** Accepted
+- **Konteks:** Pengguna meminta pengaturan perataan teks (kiri/kanan/tengah) lewat tombol di Settings, melaporkan aplikasi Linux seolah-olah selalu di-force-close, serta RAM yang terus naik seiring waktu.
+- **Keputusan:**
+  1. **Text Alignment:** `TextAlign` (`Left`/`Center`/`Right`, default `Left`) ditambahkan ke `Config` dengan tombol segmented di Settings Appearance. Renderer memakai `egui_align` untuk layout dan `aligned_galley_x` untuk galley/`Painter` manual (karaoke idle & kartu musik, judul/artis, dot clock) agar perilaku konsisten lintas backend.
+  2. **Daur hidup Linux:** `IslandApp::ui` mengirim `ViewportCommand::CancelClose` saat WM meminta close; `TrayAction::Exit` adalah satu-satunya jalur keluar (Close di eframe, `want_exit` di layer-shell). Auto-hide/fullscreen pada eframe Linux memakai viewport `1×1`, bukan `Visible(false)`. Compositor yang mematikan layer surface mengubah `try_run_layer_shell` menjadi `Err` sehingga fallback eframe di `main.rs` benar-benar berjalan.
+  3. **Stabilitas memori:** `textures_delta` selalu di-drain walau tersembunyi (mencegah kebocoran tekstur GL), loop Wayland menjumpai frame idle tanpa tessellation/GL, antrean notifikasi dibatasi 32, cache lirik memakai FIFO bounded, alert kalender dipangkas 1 hari, dan font hanya dipindai sekali.
+- **Konsekuensi:** Preferensi alignment persist di `config.toml` tanpa merusak konfigurasi lama (`#[serde(default)]`); aplikasi tidak lagi berhenti karena close request WM/auto-hide; penggunaan RAM tidak bertumbuh tak terbatas pada sesi panjang. Terverifikasi dengan `cargo test` (41 tests) dan `cargo clippy --all-targets -- -D warnings`. Lihat [[04 - Changelog & Dev Log]].
+
+## ADR-017: Kemasan Rilis v0.1.0 (AppImage, tar.gz, AUR, NSIS)
+- **Tanggal:** 2026-11-26
+- **Status:** Accepted
+- **Konteks:** Pengguna meminta AppImage, rilis Linux `.tar.gz`, paket AUR, dan installer Windows, lalu mendorong semuanya ke `main` dan mempublikasikan rilis `v0.1.0`.
+- **Keputusan:**
+  1. **Aset bersama:** `.desktop` dan ikon PNG 256×256 disimpan di `assets/` dan dipakai ulang oleh AppImage, tar.gz, dan AUR; generator ikon inline dihapus dari `scripts/build-appimage.sh`.
+  2. **Linux:** `scripts/build-linux-release.sh` menghasilkan AppImage + arsip tar.gz berisi binary, lisensi, README, `.desktop`, dan ikon.
+  3. **AUR:** `packaging/aur/PKGBUILD` membangun dari tag git `v0.1.0` dengan `cargo --locked`; `sha256sums=('SKIP')` dipakai secara sah untuk sumber VCS dan `.SRCINFO` digenerate dengan `makepkg --printsrcinfo`.
+  4. **Windows:** `installer/windows/installer.nsi` menghasilkan `setup.exe` NSIS per-user (shortcut Start Menu + uninstaller), dibangun di runner Windows GitHub Actions karena `makensis` tidak tersedia di mesin pengembangan Linux. Arsip `.zip` portable tetap dipertahankan.
+  5. **Publikasi:** Workflow release membangun keempat aset plus bundel AUR pada tag `v*`; tag `v0.1.0` didorong setelah `main` agar GitHub Release terbit otomatis.
+- **Konsekuensi:** Pengguna Windows mendapat wizard instalasi, pengguna Linux memilih AppImage/tar.gz/AUR, dan semua aset memiliki lisensi yang sama. Submit ke AUR tetap manual karena memerlukan akun maintainer; CI tidak dapat melakukannya. Lihat [[04 - Changelog & Dev Log]].
