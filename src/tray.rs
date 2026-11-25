@@ -6,6 +6,7 @@ use crate::state::ListenerStatus;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrayAction {
     OpenSettings,
+    TestNotification,
     TogglePause,
     ToggleAutoHide,
     Exit,
@@ -15,6 +16,7 @@ pub struct TrayController {
     _tray: TrayIcon,
     status_item: MenuItem,
     settings_item: MenuItem,
+    test_notif_item: MenuItem,
     pause_item: MenuItem,
     auto_hide_item: CheckMenuItem,
     exit_item: MenuItem,
@@ -25,6 +27,7 @@ impl TrayController {
         let menu = Menu::new();
         let status_item = MenuItem::new("Status: Starting...", false, None);
         let settings_item = MenuItem::new("Settings...", true, None);
+        let test_notif_item = MenuItem::new("Test Notification Popup", true, None);
         let pause_item = MenuItem::new("Pause Notifications", true, None);
         let auto_hide_item = CheckMenuItem::new("Auto-hide when idle", true, auto_hide, None);
         let exit_item = MenuItem::new("Exit", true, None);
@@ -33,6 +36,7 @@ impl TrayController {
             &status_item,
             &PredefinedMenuItem::separator(),
             &settings_item,
+            &test_notif_item,
             &pause_item,
             &auto_hide_item,
             &PredefinedMenuItem::separator(),
@@ -52,6 +56,7 @@ impl TrayController {
             _tray: tray,
             status_item,
             settings_item,
+            test_notif_item,
             pause_item,
             auto_hide_item,
             exit_item,
@@ -63,6 +68,8 @@ impl TrayController {
         while let Ok(event) = MenuEvent::receiver().try_recv() {
             if event.id == *self.settings_item.id() {
                 actions.push(TrayAction::OpenSettings);
+            } else if event.id == *self.test_notif_item.id() {
+                actions.push(TrayAction::TestNotification);
             } else if event.id == *self.pause_item.id() {
                 actions.push(TrayAction::TogglePause);
             } else if event.id == *self.auto_hide_item.id() {

@@ -50,9 +50,10 @@ fn main() -> ExitCode {
     let (media_cmd_tx, media_cmd_rx) = mpsc::channel();
     let (calendar_cmd_tx, calendar_cmd_rx) = mpsc::channel();
 
-    let initial_w = config.idle_width * config.scale;
-    let initial_h = 30.0 * config.scale;
-    let initial_x = ((platform::primary_monitor_logical_width() - initial_w) * 0.5).max(0.0);
+    let canvas = ui::permanent_canvas_size(&config);
+    let initial_x = ((platform::primary_monitor_logical_width() - canvas.x) * 0.5).max(0.0);
+
+    platform::prepare_overlay_rules(WINDOW_TITLE, config.top_offset_px);
 
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Glow,
@@ -64,8 +65,11 @@ fn main() -> ExitCode {
             .with_taskbar(false)
             .with_active(false)
             .with_resizable(false)
-            .with_inner_size([initial_w, initial_h])
-            .with_position([initial_x, config.top_offset_px]),
+            .with_minimize_button(false)
+            .with_maximize_button(false)
+            .with_close_button(false)
+            .with_inner_size([canvas.x, canvas.y])
+            .with_position([initial_x, 0.0]),
         ..Default::default()
     };
 
@@ -79,6 +83,7 @@ fn main() -> ExitCode {
 
             platform::spawn_listener(event_tx.clone(), wake.clone());
             platform::spawn_media_listener(event_tx.clone(), media_cmd_rx, wake.clone());
+            platform::spawn_fullscreen_watcher(event_tx.clone(), wake.clone());
             lyrics::spawn_lyrics_worker(lyrics_req_rx, event_tx.clone(), wake.clone());
             calendar::spawn_calendar_worker(
                 config.google_calendar_ics_url.clone(),

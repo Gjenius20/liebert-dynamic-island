@@ -15,12 +15,12 @@ Referensi cakupan fitur: [[PRD-LiebertDynamicIsland-MVP]].
 ### Fase 1: Setup Proyek & Technical Spike
 - [x] Inisialisasi `Cargo.toml` dan skeleton modul (`src/main.rs`, `src/config.rs`, `src/state.rs`, `src/tray.rs`, `src/ui/`, `src/platform/`)
 - [x] Spike Windows: uji `UserNotificationListener::Current()` pada `.exe` unpackaged vs Sparse Package/MSIX manifest *(lulus di `.exe` unpackaged: `Access: Allowed`, `21` active toasts terbaca)*
-- [ ] Spike Linux: uji D-Bus `org.freedesktop.Notifications` (`zbus`) & overlay `wlr-layer-shell` (Wayland) / dock (X11) di environment Linux
+- [ ] Spike Linux: uji D-Bus `org.freedesktop.Notifications` (`zbus`) & overlay `wlr-layer-shell` (Wayland) / dock (X11) di environment Linux *(koneksi D-Bus sesi lolos via `--spike-notifications`, dan overlay Hyprland Wayland + `ksni` tray terverifikasi live; klaim nama `org.freedesktop.Notifications` masih menunggu daemon incumbent dihentikan)*
 - [x] Finalisasi pilihan renderer Rust (`eframe 0.37` + `Renderer::Glow`) di [[03 - Catatan Rapat & Keputusan]]
 
 ### Fase 2: Core Features
 - [x] Definisikan `NotificationItem`, state machine (`Idle` ↔ `Compact` ↔ `Expanded`), dan queue sederhana di `src/state.rs`
-- [ ] Implementasikan bridge Windows WinRT & Linux D-Bus beserta error handling izin/daemon *(Windows terimplementasi & lolos spike; Linux `src/platform/linux.rs` belum dikompilasi/diuji di host Linux)*
+- [ ] Implementasikan bridge Windows WinRT & Linux D-Bus beserta error handling izin/daemon *(Windows terimplementasi & lolos spike; Linux `src/platform/linux.rs` kini lolos build release & spike D-Bus, runtime listener belum diverifikasi karena konflik daemon aktif)*
 - [x] Implementasikan System Tray (`Pause/Resume`, `Auto-hide when idle`, `Exit`) dan persistensi `config.toml` (`%APPDATA%` / `~/.config`)
 
 ### Fase 3: UI & Animation
@@ -29,7 +29,7 @@ Referensi cakupan fitur: [[PRD-LiebertDynamicIsland-MVP]].
 - [x] Implementasikan interaksi: auto-collapse 5 detik, hover expand & pause timer, serta tombol `Dismiss`
 
 ### Fase 4: Testing & Release
-- [x] Tambahkan unit test state machine, config, clock, lyrics, todo, calendar, & album accent (`cargo test` — 23 tests passed)
+- [x] Tambahkan unit test state machine, config, clock, lyrics, todo, calendar, album accent, fullscreen rect, & text truncation (`cargo test` — 27 tests passed)
 - [ ] Uji manual edge cases: multi-notifikasi berurutan, teks panjang/Unicode, multi-DPI scaling, hover expand live, top-edge hover reveal saat auto-hide, Spotify lyrics, & Google Calendar `.ics`
 - [ ] Verifikasi target performa `--release`: RAM idle `< 25 MB`, CPU idle `< 0.5%`, latency `< 150 ms`
 - [ ] Perbarui `README.md` (cara build, izin Windows, catatan daemon Linux) & lakukan smoke test binary Windows + Linux
@@ -37,7 +37,13 @@ Referensi cakupan fitur: [[PRD-LiebertDynamicIsland-MVP]].
 ## Fitur Tambahan & Ekspansi (Di Luar Scope Awal P0)
 - [x] **Music & Synced Lyrics:** Pembaca media SMTC (Windows) & MPRIS2 (Linux) + LRC lyrics via LRCLIB (`src/lyrics.rs`)
 - [x] **Karaoke, Romaji, Translate & Full Playbar:** Progressive karaoke highlight (baris/kata `<mm:ss.xx>`), romanisasi non-Latin + fallback Kana, terjemahan lirik, seekable playbar + Shuffle/Prev/Play/Next/Repeat, serta lazy CJK font fallback
-- [x] **Reference Music Card UI & Album Art:** Redesign 2-kolom dengan cover album asli (SMTC/MPRIS2), gradient wash warna dominan dinamis, multi-line wrapped karaoke `LayoutJob`, upcoming lyric preview redup, dan tombol pill `Translate`/`Romaji` di bawah
+- [x] **Reference Music Card UI & Album Art:** Redesign 2-kolom dengan cover album asli (SMTC/MPRIS2), gradient wash warna dominan dinamis, multi-line wrapped karaoke `LayoutJob`, dan upcoming lyric preview redup
+- [x] **Top-Edge Notch Dock Mode, Offline Romaji Fix & UI Polish:** Mode notch menempel tepi atas layar (`y = 0`) dengan telinga cekung + mini cover + 3-bar equalizer (sembunyi saat fullscreen), romanisasi offline `kakasi`+`any_ascii` untuk Kanji/Kana/Cina/Korea/Arab, pemindahan toggle Karaoke/Romaji/Translate ke popup Settings saja, dan polish UI menyeluruh
+- [x] **Seamless Win11 Notch, Romaji Karaoke Mode, Branded Notification Popups & Morphing Transition:** Penghapusan border/rounding DWM Windows 11 + `pin_window_top_y(..., 0)` agar menyatu sempurna di tepi atas layar, pilihan `KaraokeLyricMode` (`Original` vs `Romaji`), listener notifikasi WinRT + fallback polling `500 ms` dengan popup berwarna brand (`WhatsApp`, `Discord`, `Gmail`, browser) + `Test Popup`, serta morphing halus `Top Notch` ↔ `Floating Island` (`notch_morph`)
+- [x] **Perbaikan Stabilitas Win32 Hover, Anti-Overlap UI, Sinkronisasi Romaji & Akses Settings:** Penghapusan `DWMNCRP_DISABLED` & tombol caption Win32 (`WS_SYSMENU|WS_MINIMIZEBOX|WS_MAXIMIZEBOX`) agar tidak glitch saat hover, ekstrapolasi `LastUpdatedTime` SMTC + match durasi LRCLIB + `end_ms` jeda instrumental + `lyric_offset_ms` + dual-galley wrapped karaoke, layout header/kolom terklip rapi (`ScrollArea` lirik), serta aktivasi foreground jendela Settings (`bring_window_to_front`)
+- [x] **Fullscreen Notification Pass-Through, Mode Toggle Khusus Settings & Alignment UI:** Dynamic Island tetap tersembunyi saat fullscreen idle tetapi otomatis muncul di `HWND_TOPMOST` ketika notifikasi masuk, pergantian `Top Notch` ↔ `Floating Island` khusus di Settings, serta perataan presisi seluruh ikon (`render_icon_button`), tab, clock/minimal `LayoutJob`, playbar, dan baris ringkasan (`cargo test` 25 passed)
+- [x] **Penghapusan Garis 1px Atas (`WM_NCCALCSIZE`), Envelope Smooth Morph/Hover, Display Mode Terlihat di Settings & Fullscreen Watcher:** Subclass `overlay_wndproc` untuk menghapus inset `1 px` `winit`, animasi halus di atas envelope canvas tetap + `is_cursor_in_screen_rect`, selector Display Mode menonjol di paling atas Settings, serta `SHQueryUserNotificationState` + background `spawn_fullscreen_watcher` (`250 ms`)
+- [x] **Kanvas Permanen Anti-Flicker, Direct Win32 Visibility & Click-Through, Alignment Vektor & Fix Pengetesan:** `permanent_canvas_size` (`y = 0`) + `set_overlay_click_through` (`WS_EX_LAYERED | WS_EX_TRANSPARENT`) tanpa resize/move saat buka-tutup, `set_overlay_visible` (`SW_HIDE`/`SW_SHOWNOACTIVATE`) + `DWMWA_EXTENDED_FRAME_BOUNDS` + ambang taskbar `>= 20 px`, ikon vektor `paint_vector_icon`, `render_dot_label`, `render_centered_truncated_text`, tombol `Send Test Notification` unclipped + auto-unpause (`cargo test` 27 passed)
 - [x] **Menu Settings:** Secondary viewport untuk ukuran, warna, tema preset, corner radius, dan toggle modul (`src/ui/settings.rs`)
 - [x] **Todo List:** Checklist lokal dengan persistensi `todos.toml` (`src/todo.rs`)
 - [x] **Google Calendar:** Sync feed Secret iCal `.ics` + upcoming events & alert 5 menit (`src/calendar.rs`)

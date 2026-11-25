@@ -10,9 +10,11 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 toml = "1.2"
 directories = "6.0"
-tray-icon = "0.27"
+tray-icon = { version = "0.27", default-features = false, features = ["ksni"] }
 ureq = "3.5"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+kakasi = "0.1"
+any_ascii = "0.3"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 chrono-tz = "0.10"
 
@@ -27,8 +29,10 @@ windows = { version = "0.62", features = [
     "UI_Notifications",
     "UI_Notifications_Management",
     "Win32_Foundation",
+    "Win32_Graphics_Dwm",
     "Win32_Graphics_Gdi",
     "Win32_System_Com",
+    "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
 

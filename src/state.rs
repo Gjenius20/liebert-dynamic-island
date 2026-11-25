@@ -23,7 +23,10 @@ pub enum ListenerStatus {
     Starting,
     Listening,
     Paused,
+    // Only produced by the WinRT listener; Linux D-Bus failures map to `Error`.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     AccessDenied(String),
+    #[allow(dead_code)] // Constructed by the Linux D-Bus listener and fallback targets.
     Error(String),
 }
 
@@ -154,14 +157,10 @@ impl IslandState {
             return false;
         }
         self.fullscreen_active = active;
-        if active && self.hide_in_fullscreen {
+        if active && self.hide_in_fullscreen && self.active.is_none() {
             self.hovered = false;
-            if self.active.is_some() {
-                self.visual = IslandVisualState::Compact;
-            } else {
-                self.visual = IslandVisualState::Idle;
-                self.idle_since = Instant::now();
-            }
+            self.visual = IslandVisualState::Idle;
+            self.idle_since = Instant::now();
         }
         true
     }
@@ -213,7 +212,7 @@ impl IslandState {
     }
 
     pub fn should_be_visible(&self, now: Instant) -> bool {
-        if self.hide_in_fullscreen && self.fullscreen_active {
+        if self.hide_in_fullscreen && self.fullscreen_active && self.active.is_none() {
             return false;
         }
         if !self.auto_hide
@@ -358,7 +357,6 @@ mod tests {
         let t0 = Instant::now();
         let mut state = IslandState::new(false, Duration::from_secs(5));
         state.set_hide_in_fullscreen(true);
-        state.push_notification(sample("1", "Ping"), t0);
         state.set_hovered(true, t0);
         assert!(state.should_be_visible(t0));
 
@@ -366,12 +364,18 @@ mod tests {
         assert!(!state.should_be_visible(t0));
         assert!(!state.hovered);
 
-        assert!(state.set_fullscreen_active(false));
+        // Notification arrives during fullscreen -> overlay pops up, then hides again after dismiss.
+        state.push_notification(sample("1", "Ping"), t0);
         assert!(state.should_be_visible(t0));
+        state.dismiss_active(t0 + Duration::from_secs(1));
+        assert!(!state.should_be_visible(t0 + Duration::from_secs(1)));
+
+        assert!(state.set_fullscreen_active(false));
+        assert!(state.should_be_visible(t0 + Duration::from_secs(2)));
 
         state.set_hide_in_fullscreen(false);
         assert!(state.set_fullscreen_active(true));
-        assert!(state.should_be_visible(t0));
+        assert!(state.should_be_visible(t0 + Duration::from_secs(2)));
     }
 
     #[test]

@@ -120,6 +120,7 @@ pub enum PlatformEvent {
     Removed(String),
     Status(ListenerStatus),
     Media(Option<MediaTrack>),
+    Fullscreen(bool),
     LyricsLoaded {
         artist: String,
         title: String,
@@ -165,6 +166,17 @@ pub fn spawn_media_listener(
     let _ = (tx, cmd_rx, on_wake);
 }
 
+pub fn spawn_fullscreen_watcher(
+    tx: mpsc::Sender<PlatformEvent>,
+    on_wake: Arc<dyn Fn() + Send + Sync>,
+) {
+    #[cfg(windows)]
+    windows::spawn_fullscreen_watcher(tx, on_wake);
+
+    #[cfg(not(windows))]
+    let _ = (tx, on_wake);
+}
+
 pub fn run_notification_spike() -> Result<String, String> {
     #[cfg(windows)]
     return windows::run_notification_spike();
@@ -180,23 +192,112 @@ pub fn primary_monitor_logical_width() -> f32 {
     #[cfg(windows)]
     return windows::primary_monitor_logical_width();
 
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    return linux::primary_monitor_logical_width();
+
+    #[cfg(not(any(windows, target_os = "linux")))]
     1920.0
+}
+
+pub fn prepare_overlay_rules(window_title: &str, top_offset_px: f32) {
+    #[cfg(target_os = "linux")]
+    linux::prepare_overlay_rules(window_title, top_offset_px);
+
+    #[cfg(not(target_os = "linux"))]
+    let _ = (window_title, top_offset_px);
 }
 
 pub fn apply_no_activate_hook(window_title: &str) {
     #[cfg(windows)]
     windows::apply_no_activate_hook(window_title);
 
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    linux::apply_no_activate_hook(window_title);
+
+    #[cfg(not(any(windows, target_os = "linux")))]
     let _ = window_title;
 }
 
+pub fn position_overlay_window(
+    window_title: &str,
+    x_logical: f32,
+    y_logical: f32,
+    w_logical: f32,
+    h_logical: f32,
+) {
+    #[cfg(target_os = "linux")]
+    linux::position_overlay_window(window_title, x_logical, y_logical, w_logical, h_logical);
+
+    #[cfg(not(target_os = "linux"))]
+    let _ = (window_title, x_logical, y_logical, w_logical, h_logical);
+}
+
+pub fn set_overlay_visible(window_title: &str, visible: bool) -> bool {
+    #[cfg(windows)]
+    {
+        windows::set_overlay_visible(window_title, visible);
+        true
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = (window_title, visible);
+        false
+    }
+}
+
+pub fn set_overlay_click_through(window_title: &str, passthrough: bool) {
+    #[cfg(windows)]
+    windows::set_overlay_click_through(window_title, passthrough);
+
+    #[cfg(not(windows))]
+    let _ = (window_title, passthrough);
+}
+
+pub fn pin_window_top_y(window_title: &str, target_y_px: i32) {
+    #[cfg(windows)]
+    windows::pin_window_top_y(window_title, target_y_px);
+
+    #[cfg(not(windows))]
+    let _ = (window_title, target_y_px);
+}
+
+pub fn bring_window_to_front(window_title: &str) -> bool {
+    #[cfg(windows)]
+    return windows::bring_window_to_front(window_title);
+
+    #[cfg(not(windows))]
+    {
+        let _ = window_title;
+        true
+    }
+}
+
+pub fn is_cursor_in_screen_rect(
+    left_px: i32,
+    top_px: i32,
+    right_px: i32,
+    bottom_px: i32,
+) -> Option<bool> {
+    #[cfg(windows)]
+    return windows::is_cursor_in_screen_rect(left_px, top_px, right_px, bottom_px);
+
+    #[cfg(not(windows))]
+    {
+        let _ = (left_px, top_px, right_px, bottom_px);
+        None
+    }
+}
+
+#[allow(dead_code)] // Used as fallback on non-rect cursor checks.
 pub fn is_cursor_over_window(window_title: &str, padding_px: i32) -> Option<bool> {
     #[cfg(windows)]
     return windows::is_cursor_over_window(window_title, padding_px);
 
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    return linux::is_cursor_over_window(window_title, padding_px);
+
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         let _ = (window_title, padding_px);
         None
@@ -211,13 +312,17 @@ pub fn is_cursor_in_top_trigger(
     #[cfg(windows)]
     return windows::is_cursor_in_top_trigger(top_offset_px, trigger_width_px, pixels_per_point);
 
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    return linux::is_cursor_in_top_trigger(top_offset_px, trigger_width_px, pixels_per_point);
+
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         let _ = (top_offset_px, trigger_width_px, pixels_per_point);
         None
     }
 }
 
+#[allow(dead_code)] // Polled asynchronously by Windows fullscreen watcher; retained for Linux compatibility.
 pub fn is_foreground_fullscreen() -> bool {
     #[cfg(windows)]
     return windows::is_foreground_fullscreen();
