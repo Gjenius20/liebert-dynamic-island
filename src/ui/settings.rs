@@ -6,7 +6,7 @@ use eframe::egui::{self, Color32, CornerRadius, RichText, Stroke, Vec2, Viewport
 
 use crate::calendar::{CalendarCommand, CalendarEvent, format_countdown, format_local_time, upcoming_events};
 use crate::clock::{COMMON_TIMEZONES, format_clock, is_valid_timezone};
-use crate::config::{Config, IdleDisplayMode, KaraokeLyricMode};
+use crate::config::{Config, IdleDisplayMode, KaraokeLyricMode, TextAlign};
 use crate::lyrics::TRANSLATE_LANGUAGES;
 use crate::platform::InstalledFont;
 use crate::todo::TodoStore;
@@ -34,7 +34,7 @@ pub struct SettingsWindowState<'a> {
     pub calendar_cmd_tx: &'a mpsc::Sender<CalendarCommand>,
     pub config_dirty: &'a mut bool,
     pub test_notification_requested: &'a mut bool,
-    pub installed_fonts: &'a mut Vec<InstalledFont>,
+    pub installed_fonts: &'a mut Option<Vec<InstalledFont>>,
     pub font_search: &'a mut String,
 }
 
@@ -275,6 +275,7 @@ pub fn run_standalone_settings(ipc_sock: Option<PathBuf>) -> Result<(), String> 
 
     let config = Config::load();
     let calendar_url_input = config.google_calendar_ics_url.clone();
+    let applied_font_name = config.font_name.clone();
     let todos = TodoStore::load();
 
     struct StandaloneSettingsApp {
@@ -302,7 +303,7 @@ pub fn run_standalone_settings(ipc_sock: Option<PathBuf>) -> Result<(), String> 
 
     impl eframe::App for StandaloneSettingsApp {
         fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-            apply_settings_theme(ui);
+            apply_settings_theme(ui, self.config.accent_color);
             let panel_frame = egui::Frame::new()
                 .fill(Color32::from_rgb(19, 19, 23))
                 .inner_margin(egui::Margin::same(14));
@@ -342,6 +343,10 @@ pub fn run_standalone_settings(ipc_sock: Option<PathBuf>) -> Result<(), String> 
             });
 
             if config_dirty {
+                if self.config.font_name != self.applied_font_name {
+                    self.applied_font_name = self.config.font_name.clone();
+                    crate::ui::apply_configured_fonts(ui.ctx(), &self.applied_font_name);
+                }
                 if let Err(err) = self.config.save() {
                     eprintln!("Failed to save config: {err}");
                 } else {
@@ -377,7 +382,7 @@ pub fn run_standalone_settings(ipc_sock: Option<PathBuf>) -> Result<(), String> 
         SETTINGS_WINDOW_TITLE,
         options,
         Box::new(move |cc| {
-            crate::ui::install_base_fallback_fonts(&cc.egui_ctx);
+            crate::ui::apply_configured_fonts(&cc.egui_ctx, &config.font_name);
             Ok(Box::new(StandaloneSettingsApp {
                 tab: SettingsTab::Appearance,
                 config,
@@ -398,12 +403,11 @@ fn render_appearance_tab(
     config: &mut Config,
     config_dirty: &mut bool,
     test_notification_requested: &mut bool,
-    installed_fonts: &mut Vec<InstalledFont>,
+    installed_fonts: &mut Option<Vec<InstalledFont>>,
     font_search: &mut String,
 ) {
-    if installed_fonts.is_empty() {
-        *installed_fonts = crate::platform::list_installed_fonts();
-    }
+    // `None` means "not scanned yet"; an empty scanned list must not be rescanned every frame.
+    let fonts = installed_fonts.get_or_insert_with(crate::platform::list_installed_fonts);
     let mut changed = false;
 
     ui.label(RichText::new("Display Mode (Notch / Dynamic Island)").strong());
@@ -456,6 +460,40 @@ fn render_appearance_tab(
             egui::Slider::new(&mut config.top_offset_px, 0.0..=60.0).text("Top Offset (px)"),
         )
         .changed();
+
+    ui.add_space(8.0);
+    ui.label(RichText::new("Text Alignment").strong());
+    ui.horizontal(|ui| {
+        let btn_w = ((ui.available_width() - ui.spacing().item_spacing.x * 2.0) / 3.0).max(96.0);
+        for mode in [TextAlign::Left, TextAlign::Center, TextAlign::Right] {
+            let selected = config.text_align == mode;
+            let [ar, ag, ab] = config.accent_color;
+            let fill = if selected {
+                Color32::from_rgba_unmultiplied(ar, ag, ab, 65)
+            } else {
+                Color32::from_rgb(32, 32, 38)
+            };
+            let stroke = if selected {
+                Stroke::new(1.5, Color32::from_rgb(ar, ag, ab))
+            } else {
+                Stroke::new(1.0, Color32::from_rgb(65, 65, 76))
+            };
+            let text_col = if selected {
+                Color32::WHITE
+            } else {
+                Color32::from_rgb(185, 185, 195)
+            };
+            let btn = egui::Button::new(RichText::new(mode.label()).color(text_col).strong())
+                .min_size(egui::vec2(btn_w, 28.0))
+                .fill(fill)
+                .stroke(stroke)
+                .corner_radius(CornerRadius::same(8));
+            if ui.add(btn).clicked() && !selected {
+                config.text_align = mode;
+                changed = true;
+            }
+        }
+    });
 
     ui.add_space(8.0);
     ui.label(RichText::new("Theme Presets").strong());
@@ -552,7 +590,7 @@ fn render_appearance_tab(
                     config.font_name.clear();
                     changed = true;
                 }
-                for f in installed_fonts.iter().filter(|f| {
+                for f in fonts.iter().filter(|f| {
                     query.is_empty() || f.name.to_ascii_lowercase().contains(&query)
                 }) {
                     let is_sel = config.font_name.eq_ignore_ascii_case(&f.name);

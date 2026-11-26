@@ -143,7 +143,9 @@ pub enum PlatformEvent {
 #[allow(dead_code)] // Variants used across Linux/Windows font specs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FontFamilyTarget {
+    #[cfg_attr(windows, allow(dead_code))]
     Proportional,
+    #[cfg_attr(windows, allow(dead_code))]
     Monospace,
     Both,
 }
@@ -218,7 +220,10 @@ pub fn spawn_fullscreen_watcher(
     #[cfg(windows)]
     windows::spawn_fullscreen_watcher(tx, on_wake);
 
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    linux::spawn_fullscreen_watcher(tx, on_wake);
+
+    #[cfg(not(any(windows, target_os = "linux")))]
     let _ = (tx, on_wake);
 }
 
@@ -280,7 +285,9 @@ pub fn apply_overlay_window_setup(window_title: &str) -> bool {
     }
 
     #[cfg(target_os = "linux")]
-    return linux::apply_no_activate_hook(window_title);
+    {
+        linux::apply_no_activate_hook(window_title)
+    }
 
     #[cfg(not(any(windows, target_os = "linux")))]
     {
@@ -289,20 +296,7 @@ pub fn apply_overlay_window_setup(window_title: &str) -> bool {
     }
 }
 
-pub fn position_overlay_window(
-    window_title: &str,
-    x_logical: f32,
-    y_logical: f32,
-    w_logical: f32,
-    h_logical: f32,
-) {
-    #[cfg(target_os = "linux")]
-    linux::position_overlay_window(window_title, x_logical, y_logical, w_logical, h_logical);
-
-    #[cfg(not(target_os = "linux"))]
-    let _ = (window_title, x_logical, y_logical, w_logical, h_logical);
-}
-
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn set_overlay_visible(window_title: &str, visible: bool) -> bool {
     #[cfg(windows)]
     {
@@ -317,6 +311,7 @@ pub fn set_overlay_visible(window_title: &str, visible: bool) -> bool {
     }
 }
 
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn set_overlay_click_through(window_title: &str, passthrough: bool) {
     #[cfg(windows)]
     windows::set_overlay_click_through(window_title, passthrough);
@@ -325,6 +320,7 @@ pub fn set_overlay_click_through(window_title: &str, passthrough: bool) {
     let _ = (window_title, passthrough);
 }
 
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn pin_window_top_y(window_title: &str, target_y_px: i32) {
     #[cfg(windows)]
     windows::pin_window_top_y(window_title, target_y_px);
@@ -366,6 +362,7 @@ pub fn sync_overlay_window(
     let _ = (window_title, x_logical, y_logical, w_logical, h_logical, notch_dock_mode);
 }
 
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn is_cursor_in_screen_rect(
     left_px: i32,
     top_px: i32,
@@ -382,6 +379,7 @@ pub fn is_cursor_in_screen_rect(
     }
 }
 
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn is_cursor_in_top_trigger(
     top_offset_px: f32,
     trigger_width_px: f32,
@@ -406,6 +404,7 @@ pub fn pump_os_events() {
     windows::pump_os_events();
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 pub fn detect_overlay_hover(input: HoverPollInput<'_>) -> bool {
     #[cfg(windows)]
     return windows::detect_overlay_hover(input);

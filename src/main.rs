@@ -75,6 +75,28 @@ fn main() -> ExitCode {
             }
         };
     }
+    let config = Config::load();
+    let tray = match TrayController::new(config.auto_hide_when_idle, config.notch_dock_mode) {
+        Ok(t) => Some(t),
+        Err(err) => {
+            eprintln!("Warning: tray unavailable ({err})");
+            None
+        }
+    };
+
+    let ear_w = if config.notch_dock_mode {
+        (12.0 * config.scale).round() * 2.0
+    } else {
+        0.0
+    };
+    let initial_w = config.idle_width * config.scale + ear_w;
+    let initial_h = 30.0 * config.scale;
+    let initial_x = ((platform::primary_monitor_logical_width(1.0) - initial_w) * 0.5).max(0.0);
+    let initial_y = if config.notch_dock_mode {
+        0.0
+    } else {
+        config.top_offset_px
+    };
 
     #[cfg(target_os = "linux")]
     if std::env::var_os("WAYLAND_DISPLAY").is_some() {
@@ -143,6 +165,15 @@ fn run_ui_client(ipc_addr: &str, demo_mode: bool) -> ExitCode {
     };
 
     platform::prepare_overlay_rules(WINDOW_TITLE, initial_y);
+
+    let (win_w, win_h, win_x, win_y) = if cfg!(windows) {
+        let canvas = ui::permanent_canvas_size(&config);
+        let x = ((platform::primary_monitor_logical_width(1.0) - canvas.x) * 0.5).max(0.0);
+        let _ = (initial_w, initial_h, initial_x);
+        (canvas.x, canvas.y, x, 0.0)
+    } else {
+        (initial_w, initial_h, initial_x, initial_y)
+    };
 
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Glow,

@@ -133,10 +133,27 @@ Log *Architecture Decision Records (ADR)* untuk proyek [[00 - Dashboard Proyek]]
 - **Status:** Accepted
 - **Konteks:** Meskipun memakai envelope canvas selama animasi, memanggil `ViewportCommand::InnerSize`/`OuterPosition` pada frame awal dan akhir buka-tutup tetap menimbulkan lompatan posisi `1–2` frame karena `winit` menerapkan perintah viewport secara asinkron setelah `ui()` selesai. Selain itu, `ViewportCommand::Visible(bool)` di `winit 0.30` memanggil `SetWindowLongW` dari state internalnya (menghapus `WS_EX_NOACTIVATE` & `WS_POPUP`) serta `ShowWindow(SW_SHOW)` yang mencuri fokus foreground dari aplikasi fullscreen sehingga `is_foreground_fullscreen()` gagal. Jendela maximized dengan auto-hide taskbar Windows 11 (`work.bottom` selisih `2 px`) juga sempat salah terdeteksi sebagai fullscreen.
 - **Keputusan:**
-  1. **Permanent Fixed Canvas + Dynamic Click-Through:** Ukuran window root dikunci ke `permanent_canvas_size(config)` pada `y = 0.0` sepanjang waktu tanpa memanggil `InnerSize`/`OuterPosition` saat buka-tutup atau morph; area di luar pill dibuat click-through via `set_overlay_click_through` (`WS_EX_LAYERED | WS_EX_TRANSPARENT`).
+  1. **Permanent Fixed Canvas + Dynamic Click-Through (Windows):** Ukuran window root dikunci ke `permanent_canvas_size(config)` pada `y = 0.0` sepanjang waktu tanpa memanggil `InnerSize`/`OuterPosition` saat buka-tutup atau morph; area di luar pill dibuat click-through via `set_overlay_click_through` (`WS_EX_LAYERED | WS_EX_TRANSPARENT`).
   2. **Direct Win32 Visibility:** Mengganti `ViewportCommand::Visible` di Windows dengan `set_overlay_visible` yang memanggil `ShowWindow(hwnd, SW_HIDE / SW_SHOWNOACTIVATE)` langsung tanpa menyentuh `winit` `apply_diff`.
   3. **Accurate Fullscreen Bounds:** Menggunakan `DWMWA_EXTENDED_FRAME_BOUNDS` dan ambang batas taskbar `>= 20 px` (`is_rect_covering_monitor_as_fullscreen`) agar jendela maximized biasa tidak memicu auto-hide.
-- **Konsekuensi:** Flicker buka-tutup/morph hilang total, style `WS_EX_NOACTIVATE` dan fokus aplikasi fullscreen tetap terjaga, dan seluruh area di luar pill tetap bisa diklik menembus overlay.
+- **Konsekuensi:** Flicker buka-tutup/morph hilang total di Windows, style `WS_EX_NOACTIVATE` dan fokus aplikasi fullscreen tetap terjaga, dan seluruh area di luar pill tetap bisa diklik menembus overlay.
+
+## ADR-013b: Native Wayland `wlr-layer-shell`, Pill Translation, & Spring Physics
+- **Tanggal:** 2026-11-26
+- **Status:** Accepted
+- **Konteks:** Pada Linux Wayland, window reguler `eframe`/`winit` terikat workspace sehingga tidak dapat melayang global di atas seluruh workspace dan layer seperti Quickshell. Selain itu, pengguna menginginkan baris terjemahan ringkas di idle/compact pill dan animasi pegas harmonik ala Dynamic Island macOS.
+- **Keputusan:**
+  1. **Native Wayland `wlr-layer-shell` (`src/platform/wayland_layer.rs`):** Di Linux Wayland, overlay utama dijalankan langsung di atas `zwlr_layer_surface_v1` (`Layer::Overlay`, `Anchor::TOP`, `exclusive_zone = -1`, `KeyboardInteractivity::None`) menggunakan `smithay-client-toolkit 0.19` + `glutin 0.32` EGL + `egui_glow 0.37` + `calloop 0.13`, ditambah `hl.layer_rule` Hyprland (`order = -1`, `above_lock = false`, `no_anim = true`, `blur = false`). Dengan ini overlay terpisah penuh dari seluruh workspace, tetap tepat di atas Quickshell namun di bawah lockscreen dan layer overlay ber-order lebih tinggi, serta memakai region input kosong (`set_input_region`) saat tersembunyi. Mode `--settings --ipc-sock` menangani jendela Settings interaktif secara terpisah lewat `eframe` dengan sinkronisasi live via UNIX socket. Jalur `eframe` tetap dipertahankan sebagai fallback otomatis untuk X11/compositor non-`wlr-layer-shell` dan Windows.
+  2. **Pill Lyric Translation (`show_pill_translation`):** Menambahkan `Config::show_pill_translation` (default `true`) beserta checkbox di Settings (`Music & Synced Lyrics`), serta memperluas `IdleDisplayMode::Lyrics` agar merender baris terjemahan di bawah lirik utama (`44 px * scale` saat terjemahan tersedia).
+  3. **Animasi Spring Bouncy ala macOS (`step_spring`):** Mengganti animasi eksponensial di `src/ui/mod.rs` dengan fisika pegas harmonik teredam 2nd-order ber-substep (`omega_x`/`omega_y` & `zeta` berbeda untuk expand vs collapse serta pop-in saat `became_visible`), dilengkapi animasi spring `notch_morph` dan pacing `6 ms` pada runner Wayland.
+- **Konsekuensi:** Di Wayland (`Hyprland`/`Sway`/`River`/`Niri`), Dynamic Island tidak pernah lagi masuk atau berpindah ke workspace aplikasi biasa dan posisinya stabil di top-center di atas Quickshell.
+
+## ADR-015: Lisensi GPL-3.0 (`LICENSE.md`), Transisi Lirik Fade-Up/Down, & Release Workflow
+- **Tanggal:** 2026-11-26
+- **Status:** Accepted
+- **Konteks:** Proyek memerlukan berkas `LICENSE.md` yang kompatibel dengan dependensi `kakasi 0.1` (`GPL-3.0`), animasi pergantian baris lirik yang lebih halus di pill mode (`IdleDisplayMode::Lyrics`), serta otomatisasi rilis lintas OS Windows & Linux.
+- **Keputusan:** Menetapkan `GPL-3.0-or-later` pada `LICENSE.md` & `Cargo.toml`, menambahkan `PillLyricTransition` (`240 ms` fade-up/down terklip berdasarkan `ActiveKaraoke::line_index`) di `src/ui/mod.rs`, dan menambahkan `.github/workflows/release.yml` untuk membangun rilis Windows (`.zip`) dan Linux (`AppImage` + `.tar.gz`).
+- **Konsekuensi:** Seluruh distribusi biner memiliki lisensi yang sah, transisi lirik di pill terasa mulus di `>= 60 FPS`, dan rilis Windows + Linux otomatis tersedia setiap tag `v*` didorong ke GitHub.
 
 ## ADR-014: Pomodoro Timer, Font Perangkat, Karaoke Translate, & Windowed-Fullscreen
 - **Tanggal:** 2026-11-26
@@ -147,3 +164,25 @@ Log *Architecture Decision Records (ADR)* untuk proyek [[00 - Dashboard Proyek]]
   2. **Device Font Picker:** `collect_fonts_from_dirs` memindai direktori font OS (`.ttf`/`.otf`/`.ttc`) tanpa dependensi tambahan dan `apply_configured_fonts` menyisipkan font pilihan pada prioritas tertinggi `FontFamily::Proportional`.
   3. **Karaoke Translate & Pomodoro:** Menambah `KaraokeLyricMode::Translate` dan modul OS-agnostic `src/pomodoro.rs` (`Focus`/`ShortBreak`/`LongBreak`, notifikasi selesai fase, & countdown idle).
 - **Konsekuensi:** Seluruh preferensi tersimpan lokal di `config.toml`, tetap kompatibel dengan `#[serde(default)]`.
+
+## ADR-016: Text Alignment, Perlindungan Close Linux, & Batas Memori
+- **Tanggal:** 2026-11-26
+- **Status:** Accepted
+- **Konteks:** Pengguna meminta pengaturan perataan teks (kiri/kanan/tengah) lewat tombol di Settings, melaporkan aplikasi Linux seolah-olah selalu di-force-close, serta RAM yang terus naik seiring waktu.
+- **Keputusan:**
+  1. **Text Alignment:** `TextAlign` (`Left`/`Center`/`Right`, default `Left`) ditambahkan ke `Config` dengan tombol segmented di Settings Appearance. Renderer memakai `egui_align` untuk layout dan `aligned_galley_x` untuk galley/`Painter` manual (karaoke idle & kartu musik, judul/artis, dot clock) agar perilaku konsisten lintas backend.
+  2. **Daur hidup Linux:** `IslandApp::ui` mengirim `ViewportCommand::CancelClose` saat WM meminta close; `TrayAction::Exit` adalah satu-satunya jalur keluar (Close di eframe, `want_exit` di layer-shell). Auto-hide/fullscreen pada eframe Linux memakai viewport `1×1`, bukan `Visible(false)`. Compositor yang mematikan layer surface mengubah `try_run_layer_shell` menjadi `Err` sehingga fallback eframe di `main.rs` benar-benar berjalan.
+  3. **Stabilitas memori:** `textures_delta` selalu di-drain walau tersembunyi (mencegah kebocoran tekstur GL), loop Wayland menjumpai frame idle tanpa tessellation/GL, antrean notifikasi dibatasi 32, cache lirik memakai FIFO bounded, alert kalender dipangkas 1 hari, dan font hanya dipindai sekali.
+- **Konsekuensi:** Preferensi alignment persist di `config.toml` tanpa merusak konfigurasi lama (`#[serde(default)]`); aplikasi tidak lagi berhenti karena close request WM/auto-hide; penggunaan RAM tidak bertumbuh tak terbatas pada sesi panjang. Terverifikasi dengan `cargo test` (41 tests) dan `cargo clippy --all-targets -- -D warnings`. Lihat [[04 - Changelog & Dev Log]].
+
+## ADR-017: Kemasan Rilis v0.1.0 (AppImage, tar.gz, AUR, NSIS)
+- **Tanggal:** 2026-11-26
+- **Status:** Accepted
+- **Konteks:** Pengguna meminta AppImage, rilis Linux `.tar.gz`, paket AUR, dan installer Windows, lalu mendorong semuanya ke `main` dan mempublikasikan rilis `v0.1.0`.
+- **Keputusan:**
+  1. **Aset bersama:** `.desktop` dan ikon PNG 256×256 disimpan di `assets/` dan dipakai ulang oleh AppImage, tar.gz, dan AUR; generator ikon inline dihapus dari `scripts/build-appimage.sh`.
+  2. **Linux:** `scripts/build-linux-release.sh` menghasilkan AppImage + arsip tar.gz berisi binary, lisensi, README, `.desktop`, dan ikon.
+  3. **AUR:** `packaging/aur/PKGBUILD` membangun dari tag git `v0.1.0` dengan `cargo --locked`; `sha256sums=('SKIP')` dipakai secara sah untuk sumber VCS dan `.SRCINFO` digenerate dengan `makepkg --printsrcinfo`.
+  4. **Windows:** `installer/windows/installer.nsi` menghasilkan `setup.exe` NSIS per-user (shortcut Start Menu + uninstaller), dibangun di runner Windows GitHub Actions karena `makensis` tidak tersedia di mesin pengembangan Linux. Arsip `.zip` portable tetap dipertahankan.
+  5. **Publikasi:** Workflow release membangun keempat aset plus bundel AUR pada tag `v*`; tag `v0.1.0` didorong setelah `main` agar GitHub Release terbit otomatis.
+- **Konsekuensi:** Pengguna Windows mendapat wizard instalasi, pengguna Linux memilih AppImage/tar.gz/AUR, dan semua aset memiliki lisensi yang sama. Submit ke AUR tetap manual karena memerlukan akun maintainer; CI tidak dapat melakukannya. Lihat [[04 - Changelog & Dev Log]].

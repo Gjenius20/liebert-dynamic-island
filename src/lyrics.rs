@@ -19,6 +19,43 @@ pub const TRANSLATE_LANGUAGES: &[(&str, &str)] = &[
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+const MAX_RAW_LYRICS_CACHE: usize = 32;
+const MAX_ENRICHED_LYRICS_CACHE: usize = 64;
+
+/// FIFO cache: the worker lives for the whole process, so lyric text must not accumulate forever.
+struct BoundedCache<K: Clone + Eq + Hash, V> {
+    limit: usize,
+    values: HashMap<K, V>,
+    order: VecDeque<K>,
+}
+
+impl<K: Clone + Eq + Hash, V> BoundedCache<K, V> {
+    fn new(limit: usize) -> Self {
+        Self {
+            limit,
+            values: HashMap::new(),
+            order: VecDeque::new(),
+        }
+    }
+
+    fn get(&self, key: &K) -> Option<&V> {
+        self.values.get(key)
+    }
+
+    fn insert(&mut self, key: K, value: V) {
+        if !self.values.contains_key(&key) {
+            self.order.push_back(key.clone());
+        }
+        self.values.insert(key, value);
+        while self.order.len() > self.limit {
+            if let Some(oldest) = self.order.pop_front() {
+                self.values.remove(&oldest);
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LyricWord {
     pub time_ms: u64,
     pub text: String,
@@ -60,6 +97,7 @@ pub struct LyricsRequest {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ActiveKaraoke<'a> {
+    pub line_index: usize,
     pub text: &'a str,
     pub progress: f32,
     pub next_text: Option<&'a str>,
@@ -211,6 +249,7 @@ pub fn active_karaoke(data: &LyricsData, position_ms: u64) -> Option<ActiveKarao
                 let first = &lines[0];
                 let next_line = lines.get(1);
                 return Some(ActiveKaraoke {
+                    line_index: 0,
                     text: first.text.as_str(),
                     progress: 0.0,
                     next_text: next_line.map(|l| l.text.as_str()),
@@ -220,7 +259,8 @@ pub fn active_karaoke(data: &LyricsData, position_ms: u64) -> Option<ActiveKarao
                     next_translation: next_line.and_then(|l| l.translation.as_deref()),
                 });
             }
-            let curr = &lines[next_idx - 1];
+            let curr_idx = next_idx - 1;
+            let curr = &lines[curr_idx];
             let next_line = lines.get(next_idx);
             let next_ms = next_line
                 .map(|l| l.time_ms)
@@ -237,6 +277,7 @@ pub fn active_karaoke(data: &LyricsData, position_ms: u64) -> Option<ActiveKarao
             };
             let progress = compute_line_progress(curr, position_ms, effective_end_ms);
             Some(ActiveKaraoke {
+                line_index: curr_idx,
                 text: curr.text.as_str(),
                 progress,
                 next_text: next_line.map(|l| l.text.as_str()),
@@ -249,6 +290,7 @@ pub fn active_karaoke(data: &LyricsData, position_ms: u64) -> Option<ActiveKarao
         LyricsData::Plain(lines) => lines.first().map(|first| {
             let next_line = lines.get(1);
             ActiveKaraoke {
+                line_index: 0,
                 text: first.text.as_str(),
                 progress: 1.0,
                 next_text: next_line.map(|l| l.text.as_str()),
@@ -376,11 +418,11 @@ pub fn spawn_lyrics_worker(
                     req = newer;
                 }
 
-                let track_key = (req.artist.clone(), req.title.clone(), req.duration_secs);
+                // MPRIS players often report duration 0 then the real value: exclude it from keys.
+                let track_key = (req.artist.clone(), req.title.clone());
                 let full_key = (
                     req.artist.clone(),
                     req.title.clone(),
-                    req.duration_secs,
                     req.translate_lang.clone(),
                     req.need_romaji,
                 );
@@ -698,6 +740,20 @@ fn strip_title_noise(title: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bounded_cache_evicts_oldest_and_keeps_capacity() {
+        let mut cache = BoundedCache::new(2);
+        cache.insert("a", 1);
+        cache.insert("b", 2);
+        cache.insert("c", 3);
+        assert_eq!(cache.get(&"a"), None);
+        assert_eq!(cache.get(&"b"), Some(&2));
+        assert_eq!(cache.get(&"c"), Some(&3));
+        cache.insert("c", 30);
+        assert_eq!(cache.order.len(), 2);
+        assert_eq!(cache.get(&"c"), Some(&30));
+    }
 
     #[test]
     fn parse_lrc_handles_multi_tags_and_sorts() {

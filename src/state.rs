@@ -4,6 +4,8 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Upper bound for pending notifications so a noisy source cannot grow memory without limit.
+pub const MAX_QUEUED_NOTIFICATIONS: usize = 32;
 pub struct NotificationItem {
     pub id: String,
     pub app_name: String,
@@ -101,6 +103,9 @@ impl IslandState {
                 self.queue.pop_front();
             }
             self.queue.push_back(item);
+            while self.queue.len() > MAX_QUEUED_NOTIFICATIONS {
+                self.queue.pop_front();
+            }
         }
     }
 
@@ -287,6 +292,19 @@ mod tests {
         state.push_notification(sample("2", "Second Updated"), t0);
         assert_eq!(state.queued_count(), 1);
         assert_eq!(state.queue[0].title, "Second Updated");
+    }
+
+    #[test]
+    fn queue_is_bounded_for_unique_ids() {
+        let t0 = Instant::now();
+        let mut state = IslandState::new(false, Duration::from_secs(5));
+        state.push_notification(sample("active", "Active"), t0);
+        for i in 0..200 {
+            state.push_notification(sample(&format!("q{i}"), "Queued"), t0);
+        }
+        assert_eq!(state.queued_count(), MAX_QUEUED_NOTIFICATIONS);
+        assert_eq!(state.queue.front().map(|n| n.id.as_str()), Some("q168"));
+        assert_eq!(state.queue.back().map(|n| n.id.as_str()), Some("q199"));
     }
 
     #[test]
