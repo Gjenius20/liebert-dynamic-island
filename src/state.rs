@@ -3,9 +3,10 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 /// Upper bound for pending notifications so a noisy source cannot grow memory without limit.
 pub const MAX_QUEUED_NOTIFICATIONS: usize = 32;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NotificationItem {
     pub id: String,
     pub app_name: String,
@@ -74,7 +75,6 @@ impl IslandState {
             return;
         }
         const MAX_BODY_BYTES: usize = 2000;
-        const MAX_QUEUE_LEN: usize = 32;
         if item.body.len() > MAX_BODY_BYTES {
             let mut cut = MAX_BODY_BYTES;
             while cut > 0 && !item.body.is_char_boundary(cut) {
@@ -99,13 +99,10 @@ impl IslandState {
         if self.active.is_none() {
             self.activate(item, now);
         } else {
-            if self.queue.len() >= MAX_QUEUE_LEN {
+            while self.queue.len() >= MAX_QUEUED_NOTIFICATIONS {
                 self.queue.pop_front();
             }
             self.queue.push_back(item);
-            while self.queue.len() > MAX_QUEUED_NOTIFICATIONS {
-                self.queue.pop_front();
-            }
         }
     }
 

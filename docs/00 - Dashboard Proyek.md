@@ -29,5 +29,5 @@ Membangun overlay **Dynamic Island** yang ringan (< 25 MB RAM idle), instan (< 5
 
 ## Progres Tambahan (Terverifikasi)
 - [x] **Text Alignment di Settings:** Tombol `Left` / `Center` / `Right` (`src/config.rs`, `src/ui/settings.rs`, `src/ui/mod.rs`).
-- [x] **Daur Hidup & RAM Linux:** Close request WM dibatalkan, auto-hide memakai viewport `1×1`, layer-shell `closed` → fallback eframe, dan cache/antrean dibatasi agar RAM tidak terus naik. Lihat [[04 - Changelog & Dev Log]].
-- [x] **Distribusi v0.1.0:** AppImage + `.tar.gz` Linux, paket AUR (`PKGBUILD` + `.SRCINFO`), dan installer NSIS Windows siap; aset dipublikasikan lewat workflow release pada tag `v0.1.0`.
+- [x] **CPU Software Renderer (`SoftCanvas`), Fix Hyprland `wl_shm`, & Optimasi RAM:** Konflik merge PR #15 diselesaikan (`48 passed`, clippy bersih); overlay Linux Wayland pindah ke `wl_shm` + pemulihan `LayerSurface` otomatis + watcher fullscreen; Windows memakai `UpdateLayeredWindow` DIB (`src/platform/windows_overlay.rs`) + `--settings` on-demand; daemon headless Linux terukur `Pss 8.5 MB` / `VmRSS 11.2 MB`. Lihat [[04 - Changelog & Dev Log]].
+- [x] **Distribusi v0.1.0:** AppImage (`7.0 MB`) + `.tar.gz` (`6.7 MB`) Linux terverifikasi lokal, paket AUR (`PKGBUILD` + `.SRCINFO`), dan skrip installer NSIS Windows (`installer/windows/installer.nsi`) siap di CI (host Linux tidak memiliki `makensis`/`mingw`).

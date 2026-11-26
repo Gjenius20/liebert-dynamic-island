@@ -13,9 +13,9 @@ Referensi spesifikasi produk: [[PRD-LiebertDynamicIsland-MVP]].
 
 ## Tech Stack (Aktual)
 - **Bahasa:** Rust (`edition = "2024"`, `rustc 1.98.1` Linux / `rustc 1.99.1` Windows)
-- **UI / Renderer:** `eframe 0.37` (`egui`, `Renderer::Glow`, fitur `x11` & `wayland`, multi-viewport `show_viewport_immediate` untuk Settings) — lihat [[03 - Catatan Rapat & Keputusan]]
-- **Windows Bridge:** `windows 0.62` — Win32 (`WS_EX_NOACTIVATE`, `WS_EX_TOOLWINDOW`, `set_overlay_click_through` toggling `WS_EX_LAYERED | WS_EX_TRANSPARENT` di luar pill, `set_overlay_visible` via `ShowWindow(SW_HIDE / SW_SHOWNOACTIVATE)`, `GWL_STYLE` borderless `WS_POPUP` tanpa `WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX|WS_MAXIMIZEBOX`, subclass `overlay_wndproc` `WM_NCCALCSIZE` untuk menghapus garis `1 px` atas `winit`, `Win32_Graphics_Dwm` `DWMWA_WINDOW_CORNER_PREFERENCE`, `DWMWA_BORDER_COLOR`, & `DWMWA_EXTENDED_FRAME_BOUNDS`, `SetWindowPos` / `bring_window_to_front`, `is_cursor_in_screen_rect`, `GetSystemMetrics`, `Win32_UI_Shell` `SHQueryUserNotificationState` + `spawn_fullscreen_watcher` `250 ms` dengan `is_rect_covering_monitor_as_fullscreen`, `Win32_Graphics_Gdi` `GetForegroundWindow` + `GetMonitorInfoW`), WinRT `UserNotificationListener` (+ fallback polling `500 ms` untuk `.exe` unpackaged), `Media`/`Media_Control` (SMTC + ekstrapolasi `LastUpdatedTime` + Shuffle/Repeat/Seek), & `Storage_Streams` (Album Cover)
-- **Linux Bridge:** `zbus 6.5` (D-Bus `org.freedesktop.Notifications` — builder `session()/name()/serve_at()` mengembalikan `Self`, error ditunda ke `build().await`, hints memakai `OwnedVariant` — & MPRIS2 `org.mpris.MediaPlayer2.*` + Shuffle/Loop/Seek/`mpris:artUrl`), Hyprland UNIX IPC socket (`.socket.sock` untuk `hl.window_rule`/`move`/`resize`/fullscreen/cursor tracking), + windowing `eframe`/`winit` (X11 / Wayland)
+- **UI / Renderer:** `egui` CPU rasterizer pure-Rust (`src/ui/soft_render.rs` `SoftCanvas` ke buffer premultiplied BGRA) untuk overlay utama Wayland (`wl_shm`) & Windows (`UpdateLayeredWindow`), ditambah `eframe 0.37` (`Renderer::Glow`, fitur `x11` & `wayland`) khusus untuk jendela `--settings` on-demand dan fallback X11 — lihat [[03 - Catatan Rapat & Keputusan]] (ADR-018)
+- **Windows Bridge:** `windows 0.62` — overlay utama `src/platform/windows_overlay.rs` (`UpdateLayeredWindow` + DIB section 32-bit BGRA, `WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW`, event-driven `GetMessageW` + `WM_APP` wake + `SetTimer`, tanpa GPU ICD); fallback `eframe` di `src/platform/windows.rs` (`apply_no_activate_hook`, `WM_NCCALCSIZE`, DWM attributes, `set_overlay_click_through`), `Win32_UI_Shell` `SHQueryUserNotificationState` + `spawn_fullscreen_watcher` `250 ms` dengan `classify_fullscreen_rects`, WinRT `UserNotificationListener` (+ polling `500 ms`), `Media_Control` (SMTC), & `Storage_Streams` (Album Cover)
+- **Linux Bridge:** `zbus 6.5` (D-Bus `org.freedesktop.Notifications` & MPRIS2 `org.mpris.MediaPlayer2.*` dengan proxy reuse `CacheProperties::No`), Hyprland UNIX IPC socket (`.socket.sock` untuk `hl.layer_rule`/`eval`/fullscreen/cursor tracking), serta native Wayland `smithay-client-toolkit 0.19` + `calloop 0.13` + `wl_shm` (`SlotPool`) di `src/platform/wayland_layer.rs` (dengan pemulihan otomatis `LayerSurface` saat compositor menutup surface); fallback `daemon.rs` + `eframe` untuk X11/non-layer-shell
 - **System Tray, Config & Integrations:** `tray-icon 0.27` (fitur `ksni` murni D-Bus StatusNotifierItem tanpa dependensi GTK di Linux), `serde` + `serde_json` + `toml 1.2`, `directories 6.0`, `ureq 3.5` (LRCLIB, Google Translate `dt=t`, & Google Calendar `.ics`), `kakasi 0.1` + `any_ascii 0.3` (romanisasi offline multi-aksara), `image 0.25` (decode cover album & ekstraksi warna dominan), `chrono 0.4` + `chrono-tz 0.10`
 
 ## Struktur Folder Kode
@@ -37,8 +37,8 @@ liebert-dynamic-island/
 │   ├── build-appimage.sh        # Packaging AppImage Linux (x86_64)
 │   └── build-linux-release.sh   # Build binary + AppImage + tar.gz Linux
 └── src/
-    ├── main.rs                  # Entry point, CLI flags (--ui, --ipc-addr, --spike-notifications), & router Daemon/UI
-    ├── daemon.rs                # Headless background daemon (Tray, OS listeners, state, & on-demand UI spawner)
+    ├── main.rs                  # Entry point, CLI flags (--ui, --settings, --ipc-addr/--ipc-sock, --spike-notifications)
+    ├── daemon.rs                # Headless background daemon & on-demand UI spawner (fallback X11 / --ui)
     ├── ipc.rs                   # Protokol IPC JSON-lines via TCP loopback (DaemonToUi / UiToDaemon)
     ├── config.rs                # Load/save config.toml (size, colors, presets, clock, idle mode, .ics URL)
     ├── state.rs                 # Island state machine (Idle, Compact, Expanded), queue, & auto-hide delay
@@ -50,13 +50,15 @@ liebert-dynamic-island/
     ├── tray.rs                  # System tray menu & lifecycle control
     ├── ui/
     │   ├── mod.rs               # Overlay pill (Idle/Compact/Expanded tabs), spring physics, unified AA notch mesh, & UI loop
+    │   ├── soft_render.rs       # Pure-Rust CPU egui ClippedPrimitive rasterizer (premultiplied BGRA/RGBA)
     │   ├── icons.rs             # Crisp Painter-drawn vector icons & responsive icon buttons
-    │   └── settings.rs          # Secondary viewport Settings (Appearance, Todo, Calendar)
+    │   └── settings.rs          # Settings tabs + standalone --settings runner (Unix socket / TCP)
     └── platform/
         ├── mod.rs               # Facade lintas OS (overlay, topmost, hover, font, MediaTrack, PlatformEvent)
-        ├── windows.rs           # Win32 hover/no-activate/DWM, WinRT Notifications & SMTC
-        ├── linux.rs             # D-Bus Notifications, MPRIS2, Hyprland IPC (/eval/layer_rule), & fontconfig lookup
-        └── wayland_layer.rs     # Native Wayland wlr-layer-shell EGL/egui_glow overlay & Settings IPC runner
+        ├── windows.rs           # Win32 hover/no-activate/DWM, fullscreen watcher, WinRT Notifications & SMTC
+        ├── windows_overlay.rs   # Native Win32 UpdateLayeredWindow + DIB SoftCanvas overlay runner
+        ├── linux.rs             # D-Bus Notifications, MPRIS2 cached proxy, Hyprland IPC, & fontconfig lookup
+        └── wayland_layer.rs     # Native Wayland wlr-layer-shell wl_shm + SoftCanvas overlay & recovery loop
 ```
 
 ### Distribusi & Rilis

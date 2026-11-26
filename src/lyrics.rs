@@ -18,9 +18,8 @@ pub const TRANSLATE_LANGUAGES: &[(&str, &str)] = &[
     ("es", "Spanish"),
 ];
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-const MAX_RAW_LYRICS_CACHE: usize = 32;
-const MAX_ENRICHED_LYRICS_CACHE: usize = 64;
+const MAX_RAW_LYRICS_CACHE: usize = 8;
+const MAX_ENRICHED_LYRICS_CACHE: usize = 8;
 
 /// FIFO cache: the worker lives for the whole process, so lyric text must not accumulate forever.
 struct BoundedCache<K: Clone + Eq + Hash, V> {
@@ -55,7 +54,7 @@ impl<K: Clone + Eq + Hash, V> BoundedCache<K, V> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LyricWord {
     pub time_ms: u64,
     pub text: String,
@@ -386,32 +385,11 @@ pub fn spawn_lyrics_worker(
                 .timeout_global(Some(Duration::from_secs(5)))
                 .build();
             let agent: Agent = config.into();
-            const MAX_LYRICS_CACHE: usize = 8;
-            type EnrichedCacheKey = (String, String, Option<u64>, Option<String>, bool);
-            let mut raw_cache: HashMap<(String, String, Option<u64>), LyricsData> = HashMap::new();
-            let mut raw_order: VecDeque<(String, String, Option<u64>)> = VecDeque::new();
-            let mut enriched_cache: HashMap<EnrichedCacheKey, LyricsData> = HashMap::new();
-            let mut enriched_order: VecDeque<EnrichedCacheKey> = VecDeque::new();
-
-            fn cache_insert<K: Eq + Hash + Clone>(
-                map: &mut HashMap<K, LyricsData>,
-                order: &mut VecDeque<K>,
-                key: K,
-                val: LyricsData,
-                cap: usize,
-            ) {
-                if !map.contains_key(&key) {
-                    while map.len() >= cap {
-                        if let Some(old) = order.pop_front() {
-                            map.remove(&old);
-                        } else {
-                            break;
-                        }
-                    }
-                    order.push_back(key.clone());
-                }
-                map.insert(key, val);
-            }
+            type EnrichedCacheKey = (String, String, Option<String>, bool);
+            let mut raw_cache: BoundedCache<(String, String), LyricsData> =
+                BoundedCache::new(MAX_RAW_LYRICS_CACHE);
+            let mut enriched_cache: BoundedCache<EnrichedCacheKey, LyricsData> =
+                BoundedCache::new(MAX_ENRICHED_LYRICS_CACHE);
 
             while let Ok(mut req) = req_rx.recv() {
                 while let Ok(newer) = req_rx.try_recv() {
@@ -436,13 +414,7 @@ pub fn spawn_lyrics_worker(
                         let fetched =
                             fetch_lyrics(&agent, &req.artist, &req.title, req.duration_secs);
                         if !matches!(fetched, LyricsData::NotFound) {
-                            cache_insert(
-                                &mut raw_cache,
-                                &mut raw_order,
-                                track_key,
-                                fetched.clone(),
-                                MAX_LYRICS_CACHE,
-                            );
+                            raw_cache.insert(track_key, fetched.clone());
                         }
                         fetched
                     };
@@ -453,13 +425,7 @@ pub fn spawn_lyrics_worker(
                         req.need_romaji,
                     );
                     if !matches!(enriched, LyricsData::NotFound) {
-                        cache_insert(
-                            &mut enriched_cache,
-                            &mut enriched_order,
-                            full_key,
-                            enriched.clone(),
-                            MAX_LYRICS_CACHE,
-                        );
+                        enriched_cache.insert(full_key, enriched.clone());
                     }
                     enriched
                 };

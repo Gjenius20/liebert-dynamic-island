@@ -85,6 +85,7 @@ impl DaemonState {
         if let Some(tray) = &self.tray {
             tray.update_status(&self.state.listener_status, self.state.paused);
             tray.set_auto_hide_checked(self.config.auto_hide_when_idle);
+            tray.update_dock_mode(self.config.notch_dock_mode);
         }
     }
 
@@ -233,7 +234,7 @@ impl DaemonState {
 
 pub fn run_daemon(demo_mode: bool) -> ExitCode {
     let config = Config::load();
-    let tray = match TrayController::new(config.auto_hide_when_idle) {
+    let tray = match TrayController::new(config.auto_hide_when_idle, config.notch_dock_mode) {
         Ok(t) => Some(t),
         Err(err) => {
             eprintln!("Warning: tray unavailable ({err})");
@@ -464,6 +465,15 @@ pub fn run_daemon(demo_mode: bool) -> ExitCode {
                         } else {
                             daemon.pending_open_settings = true;
                         }
+                    }
+                    TrayAction::ToggleDockMode => {
+                        daemon.config.notch_dock_mode = !daemon.config.notch_dock_mode;
+                        daemon.sync_tray();
+                        if let Err(err) = daemon.config.save() {
+                            eprintln!("Failed to save config: {err}");
+                        }
+                        let cfg = daemon.config.clone();
+                        daemon.send_to_ui(&DaemonToUi::ConfigUpdated(cfg));
                     }
                     TrayAction::TestNotification => {
                         if daemon.ui_conn.is_some() {

@@ -301,7 +301,11 @@ fn is_cursor_over_window(window_title: &str, padding_px: i32) -> Option<bool> {
     Some(cx >= x - pad && cx <= x + w + pad && cy >= y - pad && cy <= y + h + pad)
 }
 
-fn is_cursor_in_top_trigger(top_offset_px: f32, trigger_width_px: f32) -> Option<bool> {
+pub fn is_cursor_in_top_trigger(
+    top_offset_px: f32,
+    trigger_width_px: f32,
+    _pixels_per_point: f32,
+) -> Option<bool> {
     hypr_socket_path()?;
     let (cx, cy) = hypr_cursor_pos()?;
     let mon = hypr_focused_monitor_cached()?;
@@ -320,7 +324,7 @@ pub fn detect_overlay_hover(input: HoverPollInput<'_>) -> bool {
         {
             return cached;
         }
-        let result = is_cursor_in_top_trigger(input.top_offset_px, input.trigger_width_px)
+        let result = is_cursor_in_top_trigger(input.top_offset_px, input.trigger_width_px, 1.0)
             .unwrap_or(false);
         if let Ok(mut guard) = overlay_cache().lock() {
             guard.last_trigger_probe = Some((Instant::now(), result));
@@ -354,7 +358,7 @@ pub fn detect_overlay_hover(input: HoverPollInput<'_>) -> bool {
     let over = is_cursor_over_window(input.window_title, pad).unwrap_or(false)
         || (input.currently_hovered
             && input.animating
-            && is_cursor_in_top_trigger(input.top_offset_px, input.trigger_width_px)
+            && is_cursor_in_top_trigger(input.top_offset_px, input.trigger_width_px, 1.0)
                 .unwrap_or(false));
     if let Ok(mut guard) = overlay_cache().lock() {
         guard.last_hover_probe = Some((Instant::now(), over));
@@ -372,15 +376,15 @@ pub fn spawn_fullscreen_watcher(
     std::thread::Builder::new()
         .name("linux-fullscreen-watcher".to_owned())
         .spawn(move || {
-            let mut last_fs = is_foreground_fullscreen();
-            let _ = tx.send(PlatformEvent::Fullscreen(last_fs));
+            let mut last_fs = detect_fullscreen_state();
+            let _ = tx.send(PlatformEvent::Fullscreen(last_fs.0, last_fs.1));
             on_wake();
             loop {
                 std::thread::sleep(Duration::from_millis(250));
-                let fs = is_foreground_fullscreen();
+                let fs = detect_fullscreen_state();
                 if fs != last_fs {
                     last_fs = fs;
-                    if tx.send(PlatformEvent::Fullscreen(fs)).is_err() {
+                    if tx.send(PlatformEvent::Fullscreen(fs.0, fs.1)).is_err() {
                         break;
                     }
                     on_wake();
@@ -390,17 +394,23 @@ pub fn spawn_fullscreen_watcher(
         .expect("spawn linux fullscreen watcher thread");
 }
 
-pub fn is_foreground_fullscreen() -> bool {
+pub fn detect_fullscreen_state() -> (bool, bool) {
     let Some(raw) = hypr_ipc("j/activewindow") else {
-        return false;
+        return (false, false);
     };
     let Ok(win) = serde_json::from_str::<serde_json::Value>(&raw) else {
-        return false;
+        return (false, false);
     };
     if win.get("title").and_then(|v| v.as_str()) == Some(crate::ui::WINDOW_TITLE) {
-        return false;
+        return (false, false);
     }
-    win.get("fullscreen").and_then(|v| v.as_i64()).unwrap_or(0) != 0
+    let fs_mode = win.get("fullscreen").and_then(|v| v.as_i64()).unwrap_or(0);
+    // Hyprland fullscreen mode: 0 = none, 1 = maximize (windowed), 2/3 = true fullscreen.
+    (fs_mode >= 2, fs_mode != 0)
+}
+
+pub fn is_foreground_fullscreen() -> bool {
+    detect_fullscreen_state().1
 }
 
 fn first_existing_path(candidates: &[&str]) -> Option<String> {
@@ -458,61 +468,32 @@ pub fn base_fallback_fonts() -> Vec<FontFileSpec> {
         });
     }
 
-    if let Some(path) = first_existing_path(&[
-        "/usr/share/fonts/noto/NotoSansSymbols-Regular.ttf",
-        "/usr/share/fonts/truetype/noto/NotoSansSymbols-Regular.ttf",
-    ]) {
-        specs.push(FontFileSpec {
-            name: "linux_symbols".to_owned(),
-            path,
-            family: FontFamilyTarget::Both,
-            face_indices: &[0],
-        });
-    }
-
-    if let Some(path) = first_existing_path(&[
-        "/usr/share/fonts/noto/NotoSansSymbols2-Regular.ttf",
-        "/usr/share/fonts/truetype/noto/NotoSansSymbols2-Regular.ttf",
-    ]) {
-        specs.push(FontFileSpec {
-            name: "linux_symbols2".to_owned(),
-            path,
-            family: FontFamilyTarget::Both,
-            face_indices: &[0],
-        });
-    }
-
-    if let Some(path) = first_existing_path(&[
-        "/usr/share/fonts/noto/NotoSansArabic-Regular.ttf",
-        "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf",
-    ]) {
-        specs.push(FontFileSpec {
-            name: "linux_arabic".to_owned(),
-            path,
-            family: FontFamilyTarget::Proportional,
-            face_indices: &[0],
-        });
-    }
-
     specs
 }
 
-pub fn cjk_fallback_fonts() -> Vec<FontFileSpec> {
-    const CJK_FACES: &[u32] = &[0, 1, 2, 3];
+pub fn cjk_fallback_fonts_for(script: super::CjkScript) -> Vec<FontFileSpec> {
+    let (lang, ttc_face): (&str, &'static [u32]) = match script {
+        super::CjkScript::JapaneseOrHan => (":lang=ja", &[0]),
+        super::CjkScript::Korean => (":lang=ko", &[1]),
+    };
     if let Some(path) = first_existing_path(&[
         "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
         "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",
     ])
-    .or_else(|| fc_match_file(":lang=ja"))
+    .or_else(|| fc_match_file(lang))
     {
         let faces = if path.ends_with(".ttc") {
-            CJK_FACES
+            ttc_face
         } else {
             &[0][..]
         };
+        let suffix = match script {
+            super::CjkScript::JapaneseOrHan => "jp",
+            super::CjkScript::Korean => "kr",
+        };
         return vec![FontFileSpec {
-            name: "linux_noto_cjk".to_owned(),
+            name: format!("linux_noto_cjk_{suffix}"),
             path,
             family: FontFamilyTarget::Both,
             face_indices: faces,
@@ -655,6 +636,7 @@ pub fn spawn_media_listener(
             let _ = zbus::block_on(async move {
                 let conn = Connection::session().await?;
                 let dbus = zbus::fdo::DBusProxy::new(&conn).await?;
+                let mut cached_props_proxy: Option<(String, Proxy<'static>)> = None;
 
                 loop {
                     let player_name = dbus
@@ -669,11 +651,38 @@ pub fn spawn_media_listener(
                         });
 
                     let current = if let Some(ref bus) = player_name {
-                        read_mpris_track(&conn, bus, &mut cached_art).await
+                        let need_new = cached_props_proxy
+                            .as_ref()
+                            .is_none_or(|(cached_bus, _)| cached_bus != bus);
+                        if need_new {
+                            cached_props_proxy = None;
+                            if let Ok(proxy) = zbus::proxy::Builder::<Proxy<'static>>::new(&conn)
+                                .destination(bus.clone())
+                                .path("/org/mpris/MediaPlayer2")
+                                .interface("org.freedesktop.DBus.Properties")
+                                .cache_properties(zbus::proxy::CacheProperties::No)
+                                .build()
+                                .await
+                            {
+                                cached_props_proxy = Some((bus.clone(), proxy));
+                            }
+                        }
+                        if let Some((_, ref props)) = cached_props_proxy {
+                            read_mpris_track(props, &mut cached_art).await
+                        } else {
+                            None
+                        }
                     } else {
+                        cached_props_proxy = None;
+                        cached_art = None;
                         None
                     };
                     let cur_pos_ms = current.as_ref().map(|t| t.position_ms).unwrap_or(0);
+                    let poll_interval = match &current {
+                        Some(t) if t.is_playing => Duration::from_millis(600),
+                        Some(_) => Duration::from_millis(900),
+                        None => Duration::from_millis(1200),
+                    };
 
                     let snapshot = current.as_ref().map(|t| {
                         (
@@ -691,20 +700,20 @@ pub fn spawn_media_listener(
                         on_wake();
                     }
 
-                    match cmd_rx.recv_timeout(Duration::from_millis(600)) {
+                    match cmd_rx.recv_timeout(poll_interval) {
                         Ok(cmd) => {
                             if let Some(ref bus) = player_name {
                                 match cmd {
                                     MediaCommand::TogglePlayPause
                                     | MediaCommand::Next
                                     | MediaCommand::Previous => {
-                                        if let Ok(player) = Proxy::new(
-                                            &conn,
-                                            bus.as_str(),
-                                            "/org/mpris/MediaPlayer2",
-                                            "org.mpris.MediaPlayer2.Player",
-                                        )
-                                        .await
+                                        if let Ok(player) = zbus::proxy::Builder::<Proxy<'_>>::new(&conn)
+                                            .destination(bus.as_str())
+                                            .path("/org/mpris/MediaPlayer2")
+                                            .interface("org.mpris.MediaPlayer2.Player")
+                                            .cache_properties(zbus::proxy::CacheProperties::No)
+                                            .build()
+                                            .await
                                         {
                                             let method = match cmd {
                                                 MediaCommand::TogglePlayPause => "PlayPause",
@@ -716,14 +725,7 @@ pub fn spawn_media_listener(
                                         }
                                     }
                                     MediaCommand::SetShuffle(shuffle) => {
-                                        if let Ok(props) = Proxy::new(
-                                            &conn,
-                                            bus.as_str(),
-                                            "/org/mpris/MediaPlayer2",
-                                            "org.freedesktop.DBus.Properties",
-                                        )
-                                        .await
-                                        {
+                                        if let Some((_, ref props)) = cached_props_proxy {
                                             let _: Result<(), _> = props
                                                 .call(
                                                     "Set",
@@ -737,14 +739,7 @@ pub fn spawn_media_listener(
                                         }
                                     }
                                     MediaCommand::SetRepeat(mode) => {
-                                        if let Ok(props) = Proxy::new(
-                                            &conn,
-                                            bus.as_str(),
-                                            "/org/mpris/MediaPlayer2",
-                                            "org.freedesktop.DBus.Properties",
-                                        )
-                                        .await
-                                        {
+                                        if let Some((_, ref props)) = cached_props_proxy {
                                             let loop_str = match mode {
                                                 RepeatMode::Off => "None",
                                                 RepeatMode::All => "Playlist",
@@ -763,13 +758,13 @@ pub fn spawn_media_listener(
                                         }
                                     }
                                     MediaCommand::SeekMs(target_ms) => {
-                                        if let Ok(player) = Proxy::new(
-                                            &conn,
-                                            bus.as_str(),
-                                            "/org/mpris/MediaPlayer2",
-                                            "org.mpris.MediaPlayer2.Player",
-                                        )
-                                        .await
+                                        if let Ok(player) = zbus::proxy::Builder::<Proxy<'_>>::new(&conn)
+                                            .destination(bus.as_str())
+                                            .path("/org/mpris/MediaPlayer2")
+                                            .interface("org.mpris.MediaPlayer2.Player")
+                                            .cache_properties(zbus::proxy::CacheProperties::No)
+                                            .build()
+                                            .await
                                         {
                                             let delta_us =
                                                 (target_ms as i64 - cur_pos_ms as i64) * 1000;
@@ -794,18 +789,9 @@ pub fn spawn_media_listener(
 type CachedAlbumArt = Option<((String, String), Option<Arc<AlbumArt>>)>;
 
 async fn read_mpris_track(
-    conn: &Connection,
-    bus: &str,
+    props: &Proxy<'_>,
     cached_art: &mut CachedAlbumArt,
 ) -> Option<MediaTrack> {
-    let props = Proxy::new(
-        conn,
-        bus,
-        "/org/mpris/MediaPlayer2",
-        "org.freedesktop.DBus.Properties",
-    )
-    .await
-    .ok()?;
     let all: HashMap<String, OwnedVariant> = props
         .call("GetAll", &("org.mpris.MediaPlayer2.Player",))
         .await
@@ -937,7 +923,7 @@ mod tests {
             assert!(Path::new(&spec.path).is_file(), "missing font {}", spec.path);
             assert!(!spec.face_indices.is_empty());
         }
-        let cjk = cjk_fallback_fonts();
+        let cjk = cjk_fallback_fonts_for(crate::platform::CjkScript::JapaneseOrHan);
         for spec in &cjk {
             assert!(Path::new(&spec.path).is_file(), "missing cjk font {}", spec.path);
             assert!(!spec.face_indices.is_empty());

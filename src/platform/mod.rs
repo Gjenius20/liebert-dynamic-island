@@ -176,6 +176,9 @@ pub struct HoverPollInput<'a> {
 #[cfg(windows)]
 mod windows;
 
+#[cfg(windows)]
+pub mod windows_overlay;
+
 #[cfg(target_os = "linux")]
 mod linux;
 
@@ -526,10 +529,7 @@ pub fn cjk_fallback_fonts_for(script: CjkScript) -> Vec<FontFileSpec> {
     return windows::cjk_fallback_fonts_for(script);
 
     #[cfg(target_os = "linux")]
-    {
-        let _ = script;
-        linux::cjk_fallback_fonts()
-    }
+    return linux::cjk_fallback_fonts_for(script);
 
     #[cfg(not(any(windows, target_os = "linux")))]
     {

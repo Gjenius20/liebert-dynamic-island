@@ -559,20 +559,12 @@ pub fn detect_overlay_hover(input: HoverPollInput<'_>) -> bool {
 }
 
 pub fn base_fallback_fonts() -> Vec<FontFileSpec> {
-    vec![
-        FontFileSpec {
-            name: "win_segoe_ui".to_owned(),
-            path: "C:\\Windows\\Fonts\\segoeui.ttf".to_owned(),
-            family: FontFamilyTarget::Both,
-            face_indices: &[0],
-        },
-        FontFileSpec {
-            name: "win_segoe_sym".to_owned(),
-            path: "C:\\Windows\\Fonts\\seguisym.ttf".to_owned(),
-            family: FontFamilyTarget::Both,
-            face_indices: &[0],
-        },
-    ]
+    vec![FontFileSpec {
+        name: "win_segoe_ui".to_owned(),
+        path: "C:\\Windows\\Fonts\\segoeui.ttf".to_owned(),
+        family: FontFamilyTarget::Both,
+        face_indices: &[0],
+    }]
 }
 
 pub fn cjk_fallback_fonts_for(script: super::CjkScript) -> Vec<FontFileSpec> {

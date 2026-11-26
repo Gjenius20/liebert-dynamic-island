@@ -41,10 +41,6 @@ windows = { version = "0.62", features = [
 zbus = "6.5"
 smithay-client-toolkit = { version = "0.19", default-features = false, features = ["calloop"] }
 wayland-client = "0.31"
-glutin = { version = "0.32", default-features = false, features = ["egl", "wayland"] }
-egui_glow = { version = "0.37", default-features = false }
-glow = "0.17"
-raw-window-handle = "0.6"
 calloop = "0.13"
 calloop-wayland-source = "0.3"
 

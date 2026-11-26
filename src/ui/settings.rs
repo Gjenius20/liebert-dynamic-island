@@ -1,4 +1,4 @@
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
 
@@ -49,7 +49,7 @@ struct DeferredSettingsState {
     calendar_events: Vec<CalendarEvent>,
     calendar_status: String,
     calendar_cmd_tx: mpsc::Sender<CalendarCommand>,
-    installed_fonts: Vec<InstalledFont>,
+    installed_fonts: Option<Vec<InstalledFont>>,
     font_search: String,
     dirty_from_ui: bool,
     config_dirty_out: bool,
@@ -106,7 +106,7 @@ pub fn render_settings_viewport(ctx: &egui::Context, st: SettingsWindowState<'_>
                 ds.calendar_status = st.calendar_status.to_owned();
             }
             ds.calendar_cmd_tx = st.calendar_cmd_tx.clone();
-            if ds.installed_fonts.len() != st.installed_fonts.len() {
+            if ds.installed_fonts.is_none() && st.installed_fonts.is_some() {
                 ds.installed_fonts = st.installed_fonts.clone();
             }
             ds.font_search = st.font_search.clone();
@@ -176,6 +176,7 @@ pub fn render_settings_viewport(ctx: &egui::Context, st: SettingsWindowState<'_>
                 .inner_margin(egui::Margin::same(14));
 
             let mut local_config_dirty = false;
+            let mut local_todos_dirty = false;
             let mut local_test_notif = false;
             let prev_tab = ds.tab;
             let prev_new_todo = ds.new_todo_input.clone();
@@ -197,7 +198,7 @@ pub fn render_settings_viewport(ctx: &egui::Context, st: SettingsWindowState<'_>
                         calendar_status: &ds.calendar_status,
                         calendar_cmd_tx: Some(&ds.calendar_cmd_tx),
                         config_dirty: &mut local_config_dirty,
-                        todos_dirty: &mut false,
+                        todos_dirty: &mut local_todos_dirty,
                         test_notification_requested: &mut local_test_notif,
                         calendar_set_url_requested: &mut None,
                         calendar_refresh_requested: &mut false,
@@ -208,6 +209,7 @@ pub fn render_settings_viewport(ctx: &egui::Context, st: SettingsWindowState<'_>
             });
 
             if local_config_dirty
+                || local_todos_dirty
                 || local_test_notif
                 || ds.tab != prev_tab
                 || ds.new_todo_input != prev_new_todo
@@ -238,7 +240,7 @@ struct SettingsBodyState<'a> {
     test_notification_requested: &'a mut bool,
     calendar_set_url_requested: &'a mut Option<String>,
     calendar_refresh_requested: &'a mut bool,
-    installed_fonts: &'a mut Vec<InstalledFont>,
+    installed_fonts: &'a mut Option<Vec<InstalledFont>>,
     font_search: &'a mut String,
 }
 
@@ -268,10 +270,16 @@ fn render_settings_tabs_body(ui: &mut egui::Ui, st: &mut SettingsBodyState<'_>) 
     });
 }
 
-#[cfg(target_os = "linux")]
-pub fn run_standalone_settings(ipc_sock: Option<PathBuf>) -> Result<(), String> {
+pub enum SettingsIpcTarget {
+    #[cfg(unix)]
+    Unix(PathBuf),
+    Tcp(String),
+}
+
+pub fn run_standalone_settings(ipc_target: Option<SettingsIpcTarget>) -> Result<(), String> {
     use std::io::Write;
-    use std::os::unix::net::UnixStream;
+    use std::net::TcpStream;
+    use std::time::Duration;
 
     let config = Config::load();
     let calendar_url_input = config.google_calendar_ics_url.clone();
@@ -284,19 +292,34 @@ pub fn run_standalone_settings(ipc_sock: Option<PathBuf>) -> Result<(), String> 
         todos: TodoStore,
         new_todo_input: String,
         calendar_url_input: String,
-        installed_fonts: Vec<InstalledFont>,
+        installed_fonts: Option<Vec<InstalledFont>>,
         font_search: String,
-        ipc_sock: Option<PathBuf>,
+        applied_font_name: String,
+        ipc_target: Option<SettingsIpcTarget>,
     }
 
     impl StandaloneSettingsApp {
         fn notify(&self, line: &str) {
-            let Some(path) = &self.ipc_sock else {
+            let Some(target) = &self.ipc_target else {
                 return;
             };
-            if let Ok(mut stream) = UnixStream::connect(path) {
-                let _ = stream.write_all(line.as_bytes());
-                let _ = stream.write_all(b"\n");
+            match target {
+                #[cfg(unix)]
+                SettingsIpcTarget::Unix(path) => {
+                    if let Ok(mut stream) = std::os::unix::net::UnixStream::connect(path) {
+                        let _ = stream.write_all(line.as_bytes());
+                        let _ = stream.write_all(b"\n");
+                    }
+                }
+                SettingsIpcTarget::Tcp(addr) => {
+                    if let Ok(sock) = addr.parse()
+                        && let Ok(mut stream) =
+                            TcpStream::connect_timeout(&sock, Duration::from_millis(200))
+                    {
+                        let _ = stream.write_all(line.as_bytes());
+                        let _ = stream.write_all(b"\n");
+                    }
+                }
             }
         }
     }
@@ -389,9 +412,10 @@ pub fn run_standalone_settings(ipc_sock: Option<PathBuf>) -> Result<(), String> 
                 todos,
                 new_todo_input: String::new(),
                 calendar_url_input,
-                installed_fonts: Vec::new(),
+                installed_fonts: None,
                 font_search: String::new(),
-                ipc_sock,
+                applied_font_name,
+                ipc_target,
             }))
         }),
     )

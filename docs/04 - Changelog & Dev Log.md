@@ -10,6 +10,30 @@ tags:
 
 ## 2026-11-26
 
+### Added
+
+- `src/ui/soft_render.rs`, `src/ui/mod.rs`: Menambahkan rasterizer CPU pure-Rust (`SoftCanvas`, dengan 4 unit test untuk blending premultiplied alpha BGRA/RGBA, aturan diagonal top-left anti-seam, clip-rect HiDPI, dan delta tekstur parsial/free) untuk menghilangkan kebutuhan inisialisasi OpenGL/EGL/WGL dari proses overlay utama. Lihat [[01 - Arsitektur & Spesifikasi]] dan [[03 - Catatan Rapat & Keputusan]] (ADR-018).
+- `src/platform/windows_overlay.rs`, `src/platform/mod.rs`, `src/main.rs`: Menambahkan backend overlay native Win32 berbasis `UpdateLayeredWindow` + DIB section top-down 32-bit BGRA (`try_run_layered_direct` & `run_layered_ipc_client`) yang bekerja langsung tanpa `eframe`/OpenGL GPU driver, sementara jendela Settings (`--settings --ipc-addr`) diluncurkan on-demand sebagai child process terpisah yang membebaskan seluruh memorinya saat ditutup. Lihat [[03 - Catatan Rapat & Keputusan]] (ADR-018).
+
+### Fixed
+
+- `src/state.rs`, `src/lyrics.rs`, `src/platform/linux.rs`, `src/daemon.rs`, `src/main.rs`, `src/ui/settings.rs`, `src/ui/mod.rs`: Memperbaiki seluruh error kompilasi & regresi akibat merge PR #15 (`0c9daa4`):
+  - Memindahkan atribut `#[derive(...)]` kembali ke `NotificationItem` dan `LyricWord`; menyatukan batas antrean `MAX_QUEUED_NOTIFICATIONS` serta memulihkan `BoundedCache` (kapasitas 8/8 tanpa cache `NotFound`).
+  - Memulihkan `TrayController::new(auto_hide, notch_dock_mode)`, `TrayAction::ToggleDockMode`, `sync_tray`, tanda tangan `is_cursor_in_top_trigger`, dan `detect_fullscreen_state` (`(exclusive, windowed)`).
+  - Menyatukan `installed_fonts` (`Option<Vec<InstalledFont>>`) dan `applied_font_name` pada `StandaloneSettingsApp`, mengembalikan `TextAlign`, `PillLyricTransition`, `allow_close` pada `IslandApp::ui` (mencegah deadlock `CancelClose` saat `--ui` menutup diri), serta menghapus kode duplikat hasil merge di `src/ui/mod.rs` & `src/main.rs`.
+- `src/platform/wayland_layer.rs`, `src/platform/linux.rs`: Memperbaiki crash dan bug Dynamic Island menghilang pada **Linux Hyprland** sementara ikon tray masih hidup:
+  - Mengganti `glutin`/`glow`/`egui_glow` dengan `smithay-client-toolkit` `wl_shm` (`SlotPool` `Argb8888`) + `SoftCanvas`, sehingga kegagalan EGL/NVIDIA `egl-wayland` dan error `wl_surface::invalid_size` akibat commit `set_buffer_scale` sebelum buffer baru hilang total.
+  - Menambahkan pemulihan `LayerSurface` otomatis (`WaylandState::create_layer_surface` dengan backoff dan `new_output` wake) ketika compositor mengirim `ZwlrLayerSurfaceV1::Closed` (mis. DPMS sleep, monitor hotplug, atau `hyprctl reload`) alih-alih jatuh ke fallback `eframe` `xdg_toplevel`.
+  - Memasang `platform::spawn_fullscreen_watcher` serta `ui::apply_configured_fonts` agar fitur auto-hide fullscreen dan font pilihan ikut berjalan penuh di Wayland.
+
+### Changed
+
+- `Cargo.toml`, `Cargo.lock`, `src/platform/{linux,mod,windows}.rs`, `src/ui/{mod,settings}.rs`: Mengoptimalkan penggunaan RAM & D-Bus di Linux maupun Windows:
+  - Menghapus dependensi langsung Linux `glutin`, `egui_glow`, `glow`, dan `raw-window-handle`; binary `--release` (`17 MB`) kini bebas link langsung `libGL`/`libEGL` (`ldd` hanya `libc`/`libm`/`libgcc_s`).
+  - Memangkas font eager Linux ke sans + mono (`linux_sans`, `linux_mono`), memuat tepat satu face TTC per `CjkScript` (`[0]` untuk Han/JP, `[1]` untuk Korea), serta meniadakan muatan eager `seguisym.ttf` di Windows dan melepaskan `album_art_tex`/`gradient_tex`/`installed_fonts` ketika musik berhenti / Settings ditutup.
+  - Menggunakan ulang proxy D-Bus MPRIS dengan `zbus::proxy::Builder` + `CacheProperties::No` di `spawn_media_listener` dan memanjangkan jeda poll saat pause/tanpa player (`900 ms`/`1200 ms`).
+  - Terverifikasi dengan `cargo test` (`48 passed; 0 failed`), `cargo clippy --all-targets -- -D warnings`, headless daemon Linux (`VmRSS: 11.2 MB`, `Pss: 8.5 MB`, `RssAnon: 2.0 MB`), dan packaging Linux (`dist/Liebert_Dynamic_Island-0.1.0-x86_64.AppImage` `7.0 MB` + `.tar.gz` `6.7 MB`). Lihat [[00 - Dashboard Proyek]], [[01 - Arsitektur & Spesifikasi]], dan [[03 - Catatan Rapat & Keputusan]].
+
 ### Changed
 
 - `src/main.rs`, `src/daemon.rs`, `src/ipc.rs`, `src/ui/mod.rs`, `src/platform/{mod,windows}.rs`, `src/platform/wayland_layer.rs`, `src/state.rs`, `src/lyrics.rs`, `src/calendar.rs`, `src/pomodoro.rs`: Merefaktor arsitektur menjadi **Daemon + UI On-Demand** — proses utama kini berjalan sebagai daemon headless ringan (`src/daemon.rs`, hanya `TrayController`, listener OS, worker lirik/kalender, `PomodoroTimer`, dan server IPC TCP loopback `127.0.0.1:0` di `src/ipc.rs`) tanpa memuat `eframe`/OpenGL saat idle/tersembunyi. Proses `--ui --ipc-addr <addr>` hanya di-spawn saat dibutuhkan (notifikasi masuk, hover area atas layar, menu tray Settings/Test, atau `auto_hide_when_idle = false`), dan otomatis keluar setelah 1,5 detik tersembunyi untuk membebaskan RAM GPU/OpenGL sepenuhnya.
