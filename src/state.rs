@@ -1,7 +1,9 @@
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NotificationItem {
     pub id: String,
     pub app_name: String,
@@ -18,7 +20,7 @@ pub enum IslandVisualState {
     Expanded,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ListenerStatus {
     Starting,
     Listening,

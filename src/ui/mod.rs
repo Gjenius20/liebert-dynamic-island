@@ -20,6 +20,7 @@ use crate::calendar::{
 };
 use crate::clock::format_clock;
 use crate::config::{Config, IdleDisplayMode, KaraokeLyricMode};
+use crate::ipc::{DaemonSnapshot, UiToDaemon};
 use crate::lyrics::{LyricsData, LyricsRequest, active_karaoke};
 use crate::platform::{
     self, CjkScript, FontFamilyTarget, FontFileSpec, HoverPollInput, InstalledFont, MediaCommand,
@@ -139,11 +140,21 @@ pub fn permanent_canvas_size(config: &Config) -> Vec2 {
     )
 }
 
+pub enum UiControlEvent {
+    ConfigUpdated(Config),
+    SetPaused(bool),
+    OpenSettings,
+    TestNotification,
+    Shutdown,
+}
+
 pub struct AppChannels {
     pub event_rx: mpsc::Receiver<PlatformEvent>,
     pub lyrics_req_tx: mpsc::Sender<LyricsRequest>,
     pub media_cmd_tx: mpsc::Sender<MediaCommand>,
     pub calendar_cmd_tx: mpsc::Sender<CalendarCommand>,
+    pub ui_ctrl_rx: Option<mpsc::Receiver<UiControlEvent>>,
+    pub daemon_tx: Option<mpsc::Sender<UiToDaemon>>,
 }
 
 pub struct IslandApp {
@@ -187,6 +198,7 @@ pub struct IslandApp {
     installed_fonts: Vec<InstalledFont>,
     font_search: String,
     applied_font_name: String,
+    hidden_since: Option<Instant>,
 }
 
 impl IslandApp {
@@ -263,6 +275,7 @@ impl IslandApp {
             installed_fonts: Vec::new(),
             font_search: String::new(),
             applied_font_name,
+            hidden_since: None,
         }
     }
 
@@ -611,7 +624,67 @@ impl IslandApp {
         if status_changed {
             self.sync_tray();
         }
+        if let Some(ctrl_rx) = &self.channels.ui_ctrl_rx {
+            let mut pending = Vec::new();
+            while let Ok(ev) = ctrl_rx.try_recv() {
+                pending.push(ev);
+            }
+            for ev in pending {
+                match ev {
+                    UiControlEvent::ConfigUpdated(cfg) => {
+                        self.apply_external_config(cfg, ctx);
+                    }
+                    UiControlEvent::SetPaused(paused) => {
+                        self.state.set_paused(paused);
+                    }
+                    UiControlEvent::OpenSettings => {
+                        self.open_settings(SettingsTab::Appearance, ctx);
+                        open_settings_req = true;
+                    }
+                    UiControlEvent::TestNotification => {
+                        self.push_test_notification(now);
+                        ctx.request_repaint();
+                    }
+                    UiControlEvent::Shutdown => {
+                        want_exit = true;
+                        ctx.send_viewport_cmd(ViewportCommand::Close);
+                    }
+                }
+            }
+        }
         (want_exit, open_settings_req)
+    }
+
+    pub fn apply_snapshot(&mut self, snap: DaemonSnapshot, ctx: &egui::Context) {
+        let now = Instant::now();
+        self.apply_external_config(snap.config, ctx);
+        self.state.set_paused(snap.paused);
+        self.state.listener_status = snap.listener_status;
+        if let Some(item) = snap.active_notification {
+            self.state.push_notification(item, now);
+        }
+        self.media = snap.media.map(MediaTrack::from);
+        if let Some((title, artist)) = self
+            .media
+            .as_ref()
+            .map(|t| (t.title.clone(), t.artist.clone()))
+        {
+            self.ensure_cjk_font_loaded_for_text(ctx, &title);
+            self.ensure_cjk_font_loaded_for_text(ctx, &artist);
+        }
+        self.last_lyrics_key = snap.lyrics_key;
+        self.lyrics = LyricsData::from(snap.lyrics);
+        self.calendar_events = snap.calendar_events;
+        self.calendar_status = snap.calendar_status;
+        self.last_fullscreen_exclusive = snap.fullscreen_exclusive;
+        self.last_fullscreen_windowed = snap.fullscreen_windowed;
+        if snap.open_settings {
+            self.open_settings(SettingsTab::Appearance, ctx);
+        }
+        if snap.test_notification {
+            self.push_test_notification(now);
+        }
+        ctx.request_repaint();
     }
 
     fn open_settings(&mut self, tab: SettingsTab, ctx: &egui::Context) {
@@ -1036,6 +1109,19 @@ impl IslandApp {
         };
 
         if mode == OverlayBackendMode::Eframe {
+            if self.channels.daemon_tx.is_some() {
+                if !visible && !self.show_settings && self.demo_deadline.is_none() {
+                    let since = *self.hidden_since.get_or_insert(now);
+                    if now.duration_since(since) >= Duration::from_millis(1500) {
+                        if let Some(tx) = &self.channels.daemon_tx {
+                            let _ = tx.send(UiToDaemon::UiClosing);
+                        }
+                        ctx.send_viewport_cmd(ViewportCommand::Close);
+                    }
+                } else {
+                    self.hidden_since = None;
+                }
+            }
             if repaint_after.is_zero() {
                 ctx.request_repaint();
             } else {
@@ -1258,7 +1344,9 @@ impl IslandApp {
                 tray.set_auto_hide_checked(self.config.auto_hide_when_idle);
             }
             self.sync_runtime_config(prev_lyric_opts, now);
-            if let Err(err) = self.config.save() {
+            if let Some(tx) = &self.channels.daemon_tx {
+                let _ = tx.send(UiToDaemon::ConfigSaved(self.config.clone()));
+            } else if let Err(err) = self.config.save() {
                 eprintln!("Failed to save config: {err}");
             }
             ctx.request_repaint();
@@ -1787,6 +1875,9 @@ impl IslandApp {
             }
             if dismiss_clicked {
                 self.state.dismiss_active(now);
+                if let Some(tx) = &self.channels.daemon_tx {
+                    let _ = tx.send(UiToDaemon::DismissNotification);
+                }
                 ctx.request_repaint();
             }
             return;

@@ -1,11 +1,13 @@
 use std::sync::{Arc, mpsc};
 use std::time::Instant;
 
+use serde::{Deserialize, Serialize};
+
 use crate::calendar::CalendarEvent;
 use crate::lyrics::LyricsData;
 use crate::state::{ListenerStatus, NotificationItem};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum RepeatMode {
     #[default]
     Off,
@@ -113,7 +115,7 @@ pub fn extract_dominant_accent(rgba: &[u8]) -> Option<[u8; 3]> {
     Some([r.round() as u8, g.round() as u8, b.round() as u8])
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MediaCommand {
     TogglePlayPause,
     Next,
@@ -396,6 +398,12 @@ pub fn is_cursor_in_top_trigger(
         let _ = (top_offset_px, trigger_width_px, pixels_per_point);
         None
     }
+}
+
+/// Dispatches pending OS window/tray messages on the current thread (needed by Windows headless daemon).
+pub fn pump_os_events() {
+    #[cfg(windows)]
+    windows::pump_os_events();
 }
 
 pub fn detect_overlay_hover(input: HoverPollInput<'_>) -> bool {

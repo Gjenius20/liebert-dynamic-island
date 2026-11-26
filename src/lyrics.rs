@@ -3,7 +3,7 @@ use std::hash::Hash;
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use ureq::Agent;
 
 use crate::platform::PlatformEvent;
@@ -18,13 +18,13 @@ pub const TRANSLATE_LANGUAGES: &[(&str, &str)] = &[
     ("es", "Spanish"),
 ];
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LyricWord {
     pub time_ms: u64,
     pub text: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LyricLine {
     pub time_ms: u64,
     pub end_ms: Option<u64>,
@@ -34,7 +34,7 @@ pub struct LyricLine {
     pub translation: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlainLyricLine {
     pub text: String,
     pub romaji: Option<String>,
@@ -49,7 +49,7 @@ pub enum LyricsData {
     NotFound,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LyricsRequest {
     pub artist: String,
     pub title: String,

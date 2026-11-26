@@ -12,6 +12,7 @@ tags:
 
 ### Changed
 
+- `src/main.rs`, `src/daemon.rs`, `src/ipc.rs`, `src/ui/mod.rs`, `src/platform/{mod,windows}.rs`, `src/platform/wayland_layer.rs`, `src/state.rs`, `src/lyrics.rs`, `src/calendar.rs`, `src/pomodoro.rs`: Merefaktor arsitektur menjadi **Daemon + UI On-Demand** — proses utama kini berjalan sebagai daemon headless ringan (`src/daemon.rs`, hanya `TrayController`, listener OS, worker lirik/kalender, `PomodoroTimer`, dan server IPC TCP loopback `127.0.0.1:0` di `src/ipc.rs`) tanpa memuat `eframe`/OpenGL saat idle/tersembunyi. Proses `--ui --ipc-addr <addr>` hanya di-spawn saat dibutuhkan (notifikasi masuk, hover area atas layar, menu tray Settings/Test, atau `auto_hide_when_idle = false`), dan otomatis keluar setelah 1,5 detik tersembunyi untuk membebaskan RAM GPU/OpenGL sepenuhnya.
 - `README.md`, `assets/*`: Memperbarui dokumentasi fitur dan menyematkan seluruh galeri preview UI terbaru (`ui-notch-clock.png`, `ui-island-clock.png`, `ui-notch-music.png`, `ui-island-music.png`, `ui-home.jpg` [diperbarui], `ui-music-lyrics.jpg`, `ui-todo.jpg`, `ui-calendar.jpg`, `ui-timer.jpg`, `ui-settings.png`).
 - `src/ui/mod.rs`, `src/ui/settings.rs`: Mengoptimalkan frame pacing dan alokasi memori UI — menaikkan refresh karaoke lirik ke `16 ms` (~60 FPS) dan visualizer idle ke `33 ms` (~30 FPS) saat terlihat, menurunkan repaint saat overlay tersembunyi ke `250 ms`, serta menghindari kloning ulang `installed_fonts` dan `calendar_events` setiap frame pada `DeferredSettingsState`.
 

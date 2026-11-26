@@ -27,7 +27,9 @@ liebert-dynamic-island/
 ├── scripts/
 │   └── build-appimage.sh        # Skrip build & packaging AppImage Linux (x86_64)
 └── src/
-    ├── main.rs                  # Entry point, CLI flags, & spawn background workers
+    ├── main.rs                  # Entry point, CLI flags (--ui, --ipc-addr, --spike-notifications), & router Daemon/UI
+    ├── daemon.rs                # Headless background daemon (Tray, OS listeners, state, & on-demand UI spawner)
+    ├── ipc.rs                   # Protokol IPC JSON-lines via TCP loopback (DaemonToUi / UiToDaemon)
     ├── config.rs                # Load/save config.toml (size, colors, presets, clock, idle mode, .ics URL)
     ├── state.rs                 # Island state machine (Idle, Compact, Expanded), queue, & auto-hide delay
     ├── clock.rs                 # Jam digital & formatter zona waktu IANA (chrono-tz)
