@@ -1,11 +1,13 @@
 use std::sync::{Arc, mpsc};
 use std::time::Instant;
 
+use serde::{Deserialize, Serialize};
+
 use crate::calendar::CalendarEvent;
 use crate::lyrics::LyricsData;
 use crate::state::{ListenerStatus, NotificationItem};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum RepeatMode {
     #[default]
     Off,
@@ -40,24 +42,33 @@ pub struct MediaTrack {
     pub duration_ms: u64,
     pub shuffle: bool,
     pub repeat: RepeatMode,
-    pub album_art: Option<AlbumArt>,
+    pub album_art: Option<Arc<AlbumArt>>,
     pub updated_at: Instant,
 }
 
-pub fn decode_album_art(bytes: &[u8]) -> Option<AlbumArt> {
-    let img = image::load_from_memory(bytes).ok()?;
+pub fn decode_album_art(bytes: &[u8]) -> Option<Arc<AlbumArt>> {
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(2048);
+    limits.max_image_height = Some(2048);
+    limits.max_alloc = Some(16 * 1024 * 1024);
+    reader.limits(limits);
+    let img = reader.decode().ok()?;
     let resized = img.resize(160, 160, image::imageops::FilterType::Triangle);
-    let rgba_img = resized.to_rgba8();
+    drop(img);
+    let rgba_img = resized.into_rgba8();
     let width = rgba_img.width() as usize;
     let height = rgba_img.height() as usize;
     let rgba = rgba_img.into_raw();
     let dominant_rgb = extract_dominant_accent(&rgba);
-    Some(AlbumArt {
+    Some(Arc::new(AlbumArt {
         width,
         height,
         rgba,
         dominant_rgb,
-    })
+    }))
 }
 
 pub fn extract_dominant_accent(rgba: &[u8]) -> Option<[u8; 3]> {
@@ -104,7 +115,7 @@ pub fn extract_dominant_accent(rgba: &[u8]) -> Option<[u8; 3]> {
     Some([r.round() as u8, g.round() as u8, b.round() as u8])
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MediaCommand {
     TogglePlayPause,
     Next,
@@ -120,7 +131,7 @@ pub enum PlatformEvent {
     Removed(String),
     Status(ListenerStatus),
     Media(Option<MediaTrack>),
-    Fullscreen(bool),
+    Fullscreen(bool, bool),
     LyricsLoaded {
         artist: String,
         title: String,
@@ -129,6 +140,7 @@ pub enum PlatformEvent {
     CalendarUpdated(Result<Vec<CalendarEvent>, String>),
 }
 
+#[allow(dead_code)] // Variants used across Linux/Windows font specs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FontFamilyTarget {
     #[cfg_attr(windows, allow(dead_code))]
@@ -153,7 +165,7 @@ pub struct HoverPollInput<'a> {
     pub pointer_busy: bool,
     pub currently_hovered: bool,
     pub visible: bool,
-    #[cfg_attr(windows, allow(dead_code))]
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub animating: bool,
     pub top_offset_px: f32,
     pub trigger_width_px: f32,
@@ -234,6 +246,7 @@ pub fn overlay_resizable() -> bool {
     false
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub fn should_send_outer_position() -> bool {
     #[cfg(target_os = "linux")]
     return linux::should_send_outer_position();
@@ -375,11 +388,20 @@ pub fn is_cursor_in_top_trigger(
     #[cfg(windows)]
     return windows::is_cursor_in_top_trigger(top_offset_px, trigger_width_px, pixels_per_point);
 
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    return linux::is_cursor_in_top_trigger(top_offset_px, trigger_width_px, pixels_per_point);
+
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         let _ = (top_offset_px, trigger_width_px, pixels_per_point);
         None
     }
+}
+
+/// Dispatches pending OS window/tray messages on the current thread (needed by Windows headless daemon).
+pub fn pump_os_events() {
+    #[cfg(windows)]
+    windows::pump_os_events();
 }
 
 #[cfg_attr(windows, allow(dead_code))]
@@ -493,15 +515,27 @@ pub fn base_fallback_fonts() -> Vec<FontFileSpec> {
     Vec::new()
 }
 
-pub fn cjk_fallback_fonts() -> Vec<FontFileSpec> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CjkScript {
+    JapaneseOrHan,
+    Korean,
+}
+
+pub fn cjk_fallback_fonts_for(script: CjkScript) -> Vec<FontFileSpec> {
     #[cfg(windows)]
-    return windows::cjk_fallback_fonts();
+    return windows::cjk_fallback_fonts_for(script);
 
     #[cfg(target_os = "linux")]
-    return linux::cjk_fallback_fonts();
+    {
+        let _ = script;
+        linux::cjk_fallback_fonts()
+    }
 
     #[cfg(not(any(windows, target_os = "linux")))]
-    Vec::new()
+    {
+        let _ = script;
+        Vec::new()
+    }
 }
 
 #[cfg(test)]

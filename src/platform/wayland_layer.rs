@@ -581,6 +581,8 @@ pub fn try_run_layer_shell(
             lyrics_req_tx,
             media_cmd_tx,
             calendar_cmd_tx,
+            ui_ctrl_rx: None,
+            daemon_tx: None,
         },
         tray,
         demo_mode,
