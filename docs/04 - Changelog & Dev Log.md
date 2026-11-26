@@ -9,6 +9,9 @@ tags:
 # 04 - Changelog & Dev Log
 
 ## 2026-11-26
+### Fixed
+- `src/ui/settings.rs`, `src/platform/mod.rs`: Memperbaiki kegagalan `clippy` khusus target Windows yang menggagalkan job CI `Build Windows (zip + NSIS installer)`: import `PathBuf` untuk `run_standalone_settings` kini hanya dikompilasi di Linux, varian `FontFamilyTarget` dan field `HoverPollInput::animating` yang memang tidak dipakai di Windows diberi `#[cfg_attr(windows, allow(dead_code))]`, dan `apply_overlay_window_setup` memakai blok ekspresi `#[cfg]` tanpa `return` yang berlebih. `cargo test` (41 passed), `cargo clippy --all-targets -- -D warnings`, serta cross-check `cargo clippy --target x86_64-pc-windows-gnu --all-targets -- -D warnings` semuanya bersih. Lihat [[01 - Arsitektur & Spesifikasi]] dan [[03 - Catatan Rapat & Keputusan]].
+
 ### Added
 - `src/config.rs`, `src/ui/settings.rs`, `src/ui/mod.rs`: Menambahkan preferensi **`TextAlign`** (`Left` / `Center` / `Right`, default `Left`) dengan tombol pilihan **Text Alignment** di tab **Appearance** Settings. Alignment diterapkan pada lirik idle/kartu musik (termasuk karaoke, romaji, dan terjemahan yang digambar manual), judul/body notifikasi compact & expanded, judul/artis lagu, clock/minimal dot, serta daftar todo/kalendar. Lihat [[01 - Arsitektur & Spesifikasi]] dan [[03 - Catatan Rapat & Keputusan]].
 - `packaging/aur/PKGBUILD`, `packaging/aur/.SRCINFO`, `installer/windows/installer.nsi`, `assets/`, `scripts/build-linux-release.sh`: Menambahkan paket AUR (build dari tag `v0.1.0`, pasang binary + `.desktop` + ikon), installer NSIS Windows (shortcut Start Menu & uninstaller), aset desktop/icon bersama, dan skrip kemasan Linux yang menghasilkan `.tar.gz` alongside AppImage. Lihat [[01 - Arsitektur & Spesifikasi]] dan [[03 - Catatan Rapat & Keputusan]] (ADR-017).

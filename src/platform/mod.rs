@@ -131,7 +131,9 @@ pub enum PlatformEvent {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FontFamilyTarget {
+    #[cfg_attr(windows, allow(dead_code))]
     Proportional,
+    #[cfg_attr(windows, allow(dead_code))]
     Monospace,
     Both,
 }
@@ -151,6 +153,7 @@ pub struct HoverPollInput<'a> {
     pub pointer_busy: bool,
     pub currently_hovered: bool,
     pub visible: bool,
+    #[cfg_attr(windows, allow(dead_code))]
     pub animating: bool,
     pub top_offset_px: f32,
     pub trigger_width_px: f32,
@@ -265,11 +268,13 @@ pub fn apply_overlay_window_setup(window_title: &str) -> bool {
     #[cfg(windows)]
     {
         windows::apply_no_activate_hook(window_title);
-        return true;
+        true
     }
 
     #[cfg(target_os = "linux")]
-    return linux::apply_no_activate_hook(window_title);
+    {
+        linux::apply_no_activate_hook(window_title)
+    }
 
     #[cfg(not(any(windows, target_os = "linux")))]
     {
